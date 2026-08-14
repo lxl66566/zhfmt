@@ -47,7 +47,7 @@ pub struct ConfigFile {
     /// Glob patterns to exclude, relative to the current working directory.
     pub exclude: Vec<String>,
     /// Number of walker threads; 0 or absent means auto.
-    pub threads: Option<usize>,
+    pub jobs: Option<usize>,
 }
 
 /// Resolved configuration used by the runner.
@@ -60,7 +60,7 @@ pub struct Config {
     /// Blacklist globs (matched against paths relative to the walk root).
     pub exclude: Vec<String>,
     /// Walker threads; 0 means auto.
-    pub threads: usize,
+    pub jobs: usize,
 }
 
 impl Default for Config {
@@ -72,7 +72,7 @@ impl Default for Config {
                 .collect(),
             include: Vec::new(),
             exclude: Vec::new(),
-            threads: 0,
+            jobs: 0,
         }
     }
 }
@@ -100,7 +100,7 @@ impl Config {
                 .unwrap_or_else(|| Config::default().extensions),
             include: file.include,
             exclude: file.exclude,
-            threads: file.threads.unwrap_or(0),
+            jobs: file.jobs.unwrap_or(0),
         })
     }
 }

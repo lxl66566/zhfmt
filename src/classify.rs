@@ -18,9 +18,11 @@ pub enum Class {
     /// Fullwidth / CJK punctuation (`，` `。` `「」` etc.): never creates a boundary.
     Neutral,
     /// Transparent delimiter: skipped when looking for the effective boundary
-    /// character (quotes, emphasis marks, brackets, ...).
+    /// character. Only unpaired emphasis markers (`*`, `~`) remain soft;
+    /// quotes and brackets are opaque so markup is never split from text.
     Soft,
     /// Structural delimiter that wakes the scanner (`` ` ``, `[`, `]`).
+    /// (`<`, `*` and `~` also wake the scanner, but keep their own classes.)
     Hard,
     /// Whitespace: breaks any boundary.
     Space,
@@ -40,7 +42,7 @@ const ASCII_CLASS: [Class; 128] = {
             b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' => Latin,
             b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C => Space,
             b'`' | b'[' | b']' => Hard,
-            b'*' | b'~' | b'"' | b'\'' | b'(' | b')' | b'<' | b'>' => Soft,
+            b'*' | b'~' => Soft,
             _ => Other,
         };
         i += 1;
@@ -48,11 +50,13 @@ const ASCII_CLASS: [Class; 128] = {
     t
 };
 
-/// Whether this byte can wake the SWAR scanner (non-ASCII or a hard delimiter).
+/// Whether this byte can wake the SWAR scanner: non-ASCII, a hard delimiter,
+/// or the start of a structural construct (`<` for HTML tags, `*`/`~` for
+/// emphasis runs).
 #[inline(always)]
 #[must_use]
 pub const fn is_wake_byte(b: u8) -> bool {
-    b >= 0x80 || b == b'`' || b == b'[' || b == b']'
+    b >= 0x80 || matches!(b, b'`' | b'[' | b']' | b'<' | b'*' | b'~')
 }
 
 #[inline(always)]
@@ -155,8 +159,8 @@ pub const fn classify_codepoint(cp: u32) -> Class {
         | 0xFF61..=0xFF9F => Class::Cjk,
         // CJK symbols & punctuation, fullwidth punctuation/symbols.
         0x3000..=0x303F | 0xFF01..=0xFF60 | 0xFFE0..=0xFFEF => Class::Neutral,
-        // Curly quotes are transparent like their ASCII counterparts.
-        0xAB | 0xBB | 0x2018..=0x201F | 0x2039..=0x203A | 0x2E42 => Class::Soft,
+        // Curly quotes are opaque like their ASCII counterparts: they block
+        // the boundary instead of letting it look through.
         _ => Class::Other,
     }
 }
@@ -193,7 +197,7 @@ mod tests {
         assert_eq!(cls("["), Class::Hard);
         assert_eq!(cls("]"), Class::Hard);
         assert_eq!(cls("*"), Class::Soft);
-        assert_eq!(cls("("), Class::Soft);
+        assert_eq!(cls("("), Class::Other);
         assert_eq!(cls(","), Class::Other);
         assert_eq!(cls("_"), Class::Other);
         assert_eq!(cls("%"), Class::Other);
@@ -223,8 +227,19 @@ mod tests {
 
     #[test]
     fn soft_and_other() {
-        assert_eq!(cls("“"), Class::Soft);
-        assert_eq!(cls("”"), Class::Soft);
+        assert_eq!(cls("*"), Class::Soft);
+        assert_eq!(cls("~"), Class::Soft);
+        // Quotes, parens and angle brackets are opaque: they block boundaries.
+        assert_eq!(cls("\""), Class::Other);
+        assert_eq!(cls("'"), Class::Other);
+        assert_eq!(cls("("), Class::Other);
+        assert_eq!(cls(")"), Class::Other);
+        assert_eq!(cls("<"), Class::Other);
+        assert_eq!(cls(">"), Class::Other);
+        assert_eq!(cls("“"), Class::Other);
+        assert_eq!(cls("”"), Class::Other);
+        assert_eq!(cls("‘"), Class::Other);
+        assert_eq!(cls("«"), Class::Other);
         assert_eq!(cls("🎉"), Class::Other);
     }
 

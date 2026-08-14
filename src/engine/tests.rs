@@ -114,8 +114,9 @@ fn links() {
     changed!("中文[note]english", "中文 [note]english");
     changed!("中文[note]中文", "中文 [note] 中文");
     unchanged!("中文[中文]english");
-    // Malformed: space inside parens -> not a URL, treated as plain text.
-    changed!("[a](b c)中文", "[a](b c) 中文");
+    // Malformed: space inside parens -> not a URL, treated as plain text;
+    // the `)` is opaque and blocks the boundary.
+    unchanged!("[a](b c)中文");
     // Nested parens inside URL (Wikipedia style).
     changed!(
         "见[link](https://en.wiki/Foo_(bar))条目",
@@ -132,16 +133,18 @@ fn emphasis_and_quotes() {
     changed!("这是**bold**一点", "这是 **bold** 一点");
     changed!("这是~~deleted~~一点", "这是 ~~deleted~~ 一点");
     unchanged!("这是*重点*一点");
-    changed!("他说\"hello\"了", "他说 \"hello\" 了");
-    changed!("他说'hello'了", "他说 'hello' 了");
+    // Quotes and parens are opaque: they block the boundary, so markup is
+    // never split from the text it wraps.
+    unchanged!("他说\"hello\"了");
+    unchanged!("他说'hello'了");
     unchanged!("他说\"你好\"了");
-    changed!("中文(english)中文", "中文 (english) 中文");
+    unchanged!("中文(english)中文");
     unchanged!("中文(中文)中文");
 }
 
 #[test]
 fn curly_quotes() {
-    changed!("他说“hello”了", "他说 “hello” 了");
+    unchanged!("他说“hello”了");
     unchanged!("他说“你好”了");
 }
 
@@ -178,6 +181,10 @@ fn idempotent() {
         "我有3个苹果",
         "这是*important*一点",
         "他说“hello”了",
+        "galgame CG**鉴赏**",
+        "<span title=\"你知道的太多了\">测试text</span>",
+        "负面消息[^1][^2]让我",
+        "解法([ref](url))：",
     ];
     for case in cases {
         let once = fmt(case);
@@ -229,4 +236,104 @@ fn markdown_documents() {
     // Hard-coded strings in md code spans are protected.
     unchanged!("配置项 `name中文` 保持原样");
     changed!("配置项`name中文`保持", "配置项 `name中文`保持");
+}
+
+// The following test groups persist real-world regression cases: constructs
+// where adding a space would change rendering or break semantics.
+
+#[test]
+fn html_tags_opaque() {
+    // Attribute values are never inspected.
+    unchanged!("<span class=\"heimu\" title=\"你知道的太多了\">不过我已经关了自动更新</span>");
+    unchanged!("<a title=\"中文english混合\">x</a>");
+    // No space between a tag edge and adjacent CJK text.
+    unchanged!("<heimu>我 PC 端剪贴板</heimu>");
+    unchanged!("<dtlslong>装了 Debian 10</dtlslong>");
+    unchanged!("<summary>查看</summary>");
+    unchanged!("<div class=\"subtitle\">记录点点滴滴</div>");
+    unchanged!("<h3>定位精确的软件</h3>");
+    unchanged!("<text style=\"color:red;font-weight:bold\">未解决！</text>以下功能默认为免费版");
+    unchanged!("她拿了<span>奖学金</span>。10 至 11 月");
+    unchanged!("（问题）</span>然后因为");
+    unchanged!("数据<span class=\"heimu\">隐藏</span>内容");
+    unchanged!("grub 引导<span class=\"x\">注</span>");
+    // Self-closing tags block both sides.
+    unchanged!("崩溃<br/>![空指针](x.png)");
+    unchanged!("便宜<br/>延迟低");
+    unchanged!("存疑<br/>来源请求");
+    // Comments are opaque too.
+    unchanged!("<!-- 注释comment -->后文");
+    // A `<` that does not open a valid tag is a literal char.
+    unchanged!("a < b 并且 c > d");
+    // The literal `<` blocks its own seam, but the `2|中` boundary has no
+    // markup at it, so the usual rule applies.
+    changed!("1<2中文", "1<2 中文");
+}
+
+#[test]
+fn vue_and_custom_tags() {
+    // Slot names must never be split.
+    unchanged!("<template #廃村少女2>");
+    unchanged!("<template #9nine九次九日九重色>");
+    unchanged!("<template #弹丸论破2>");
+    unchanged!("<template #兰斯01重制>");
+    unchanged!("<template #天使☆嚣嚣RE-BOOT!>");
+    unchanged!("<template #春音AliceGram>");
+}
+
+#[test]
+fn furigana_and_badge() {
+    // Furigana attributes keep CJK content intact; tags never split words.
+    unchanged!("<furigana f=\"ワードプロセッサ\">word</furigana>");
+    unchanged!("|体|<furigana f=\"たい\">体</furigana>育|");
+    unchanged!("「…<furigana f=\"たち\">質</furigana>が悪い」");
+    // An unpaired `**` followed by a tag: no space is inserted.
+    unchanged!("GB 数**<Badge type=\"tip\" text=\"合理价格\" />");
+}
+
+#[test]
+fn footnote_refs() {
+    unchanged!("leetcode 上的[^1]题目");
+    unchanged!("负面消息[^1][^2]让我");
+    unchanged!("“三分饥[^2]和寒”");
+    // Footnote definitions: the marker is opaque, the body is prose.
+    changed!("[^1]: 参考reference文献", "[^1]: 参考 reference 文献");
+    // Even before `(`, `[^...]` stays opaque (conservative).
+    unchanged!("见[^top](https://url)条目");
+}
+
+#[test]
+fn parens_and_quotes_block() {
+    // No space is ever stuffed inside parens, even around links/code.
+    unchanged!("解法([ref](url))：");
+    unchanged!("顶层模块(`crate`)");
+    unchanged!("中文(english)中文");
+    // Quotes hug their content; no boundary is created through them.
+    unchanged!("拒绝断定“A 和 B 是同一个人”");
+    unchanged!("喊“UNO!”");
+    unchanged!("Luna“算法稳定币”");
+    unchanged!("“打开一个 PDF”模式");
+    unchanged!("重命名为”damage.cfg”");
+    // The apostrophe inside a word is not at the CJK boundary, so the usual
+    // rule applies to the word as a whole.
+    changed!("it's中文", "it's 中文");
+}
+
+#[test]
+fn emphasis_pairing() {
+    // Spaces go outside the markers, decided by the interior content.
+    changed!("galgame CG**鉴赏**", "galgame CG **鉴赏**");
+    changed!("bold**中文**后缀", "bold **中文**后缀");
+    changed!(
+        "前缀**中文english混排**后缀",
+        "前缀**中文 english 混排**后缀"
+    );
+    // Unpaired markers stay transparent.
+    unchanged!("星号*不成对中文");
+    changed!("5*3中文的结果", "5*3 中文的结果");
+    // List bullets are not emphasis openings.
+    unchanged!("* 列表项 item");
+    // Mismatched run lengths do not pair; the transparent `*` is looked
+    // through as before.
+    changed!("前缀*em**后缀", "前缀 *em** 后缀");
 }

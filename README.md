@@ -2,15 +2,15 @@
 
 高性能中文文档批量格式化工具：遵循中文写作原则（盘古之白），在中文与英文/数字之间自动添加空格。
 
-设计目标：
+- 安全：只插入单个空格，从不删除任何内容；原子化替换文件。
+- 快速：SWAR 扫描 + COW，无任何正则；已经格式化好的文件只扫描、不分配 buffer、不写回；多文件并行处理。
+- 专注：不同于 autocorrect，zhfmt 只做加空格这一件事，尽量不产生预期外的修改。
 
-- 安全：变换是纯粹插入式的（只插入单个空格，从不删除任何内容），幂等，可反复运行；inline code 与代码块内部、链接 URL 一律不改动
-- blazing fast：SWAR 扫描 + COW，无任何正则；已经格式化好的文件只扫描、不分配 buffer、不写回；多文件并行处理
-- 克制：相比 autocorrect 等工具，zhfmt 只做加空格这一件事，不产生预期外的修改
+该工具主要用于 markdown 文档格式化，有感知 markdown 链接、内嵌 html、inline code、代码块、脚注的能力，尽力避免非预期的行为。也可以用于其他纯文本格式的空格添加。
 
 ## 安装
 
-前往 [Release](https://github.com/lxl66566/zhfmt/Releases) 下载 prebuilt binary。
+前往 [Release](https://github.com/lxl66566/zhfmt/releases) 下载 prebuilt binary。
 
 ## 使用
 
@@ -21,50 +21,52 @@ zhfmt --check               # CI 模式：只报告会变化的文件，存在�
 zhfmt --diff                # 打印 unified diff，不写回，退出码同上
 cat a.md | zhfmt            # 管道模式：stdin -> stdout
 zhfmt --ext md,rst docs/    # 覆盖要处理的扩展名列表
-zhfmt --threads 4           # 指定 walker 线程数（默认自动）
+zhfmt -j 4                  # 指定线程数
 ```
 
-- 默认只格式化以下扩展名文件：`md, markdown, mdx, txt, rst`；显式传入的文件路径不受限制
-- 文件扫描遵循 `.gitignore`
-- 退出码：0 正常；1 `--check`/`--diff` 发现差异；2 错误
+- 默认只格式化以下扩展名文件：`md, markdown, mdx, txt, rst`；显式传入的文件路径不受限制。
+- 文件扫描遵循 `.gitignore`。
+- exit code：0 正常；1 `--check`/`--diff` 发现差异；2 错误。
 
 效果示例：
 
 ```text
-在这个`myfunc`函数内        ->  在这个 `myfunc` 函数内
+在这个`myfunc`函数内           ->  在这个 `myfunc` 函数内
 这是一个[link](https:Xxx)格式  ->  这是一个 [link](https:Xxx) 格式
-我有3个苹果                 ->  我有 3 个苹果
-中文，english               ->  不变（全角标点阻断边界）
+我有3个苹果                    ->  我有 3 个苹果
 ```
 
 更多边界样例（inline code、链接、强调、引号、日/韩文、畸形 UTF-8 等）请直接阅读 [src/engine/tests.rs](src/engine/tests.rs)。
 
 ## 配置文件
 
-查找顺序：从当前目录逐级向上查找 `zhfmt.json` 或 `.zhfmt.json`，取最近的一份；都没有则尝试全局配置（`$XDG_CONFIG_HOME/zhfmt/zhfmt.json`，Windows 下为 `%APPDATA%` 对应目录）；再没有则使用默认配置。
+查找顺序：从当前目录逐级向上查找 `zhfmt.json` 或 `.zhfmt.json`，取最近；都没有则尝试全局配置（`$XDG_CONFIG_HOME/zhfmt/zhfmt.json`，Windows 下为 `%APPDATA%` 对应目录）；再没有则使用默认配置。
 
 ```json
 {
   "extensions": ["md", "markdown", "mdx", "txt", "rst"],
   "include": ["docs/*.adoc"],
   "exclude": ["node_modules/", "target/"],
-  "threads": 0
+  "jobs": 0
 }
 ```
 
 - `extensions`：要处理的扩展名白名单（不带点），整体覆盖默认值
 - `include`：额外的 glob 白名单，命中后即使扩展名不匹配也会处理
 - `exclude`：glob 黑名单，相对路径匹配
-- `threads`：walker 线程数，0 或 null 为自动
+- `jobs`：处理线程数，0 或 null 为自动
 
 ## 算法简述
 
 核心在 [src/engine/mod.rs](src/engine/mod.rs)，字符分类在 [src/classify.rs](src/classify.rs)。
 
-1. 字符分类：每个字符被归为 `Latin`（a-zA-Z0-9）、`CJK`（汉字/假名/韩文/全角字母数字）、`Neutral`（全角标点）、`Soft`（透明界定符：引号、`*`、`(` 等）、`Hard`（结构界定符：`` ` ``、`[`、`]`）、`Space`、`Other`
-2. SWAR 扫描：边界只可能出现在非 ASCII 字节或 Hard 界定符处，因此主循环以 8 字节/步跳过无关内容，只在"唤醒字节"处做标量处理
+1. 字符分类：每个字符被归为 `Latin`（a-zA-Z0-9）、`CJK`（汉字/假名/韩文/全角字母数字）、`Neutral`（全角标点）、`Soft`（透明界定符：仅未配对的 `*`、`~`）、`Hard`（结构界定符：`` ` ``、`[`、`]`）、`Space`、`Other`（含引号、括号、裸 `<`/`>` 等，阻断边界）
+2. SWAR 扫描：边界只可能出现在非 ASCII 字节或结构字节处，因此主循环以 8 字节/步跳过无关内容，只在"唤醒字节"处做标量处理
 3. 边界判定：仅当有效边界两侧分别为 `Latin` 与 `CJK` 时插入一个空格；`Soft` 字符会被透视（取内部最近的内容字符参与判定）；`Neutral`、`Other`、空白都会阻断边界
-4. 结构跳过：backtick code span（含成对的 fenced code block）内部原样跳过，其左右边界分别由内部首/尾内容字符决定；`[text](url)` 的 text 按正文处理，url 整体跳过且不影响边界
+4. 结构处理：
+   - backtick code span（含成对的 fenced code block）内部原样跳过，其左右边界分别由内部首/尾内容字符决定；`[text](url)` 的 text 按正文处理，url 整体跳过且不影响边界
+   - HTML 标签/注释（`<...>`、`<!-- ... -->`）与脚注引用 `[^id]` 是不透明原子：内部（含 `title="中文"`、`<template #槽位名>` 等）永不扫描，两侧边界一律阻断
+   - 强调符号（`*...*`、`**...**`、`~~...~~`）成对时作为整体：边界由内部内容决定，空格只加在标记**外侧**（`CG**鉴赏**` -> `CG **鉴赏**`），内部仍正常格式化；未配对的标记按 `Soft` 透视
 5. 惰性输出：扫描到第一个插入点才分配输出缓冲并开始拷贝；全文无插入则返回"无变化"，调用方跳过写回
 
 畸形 UTF-8 字节被归类为 `Other` 并原样透传，不会导致错误或误改。

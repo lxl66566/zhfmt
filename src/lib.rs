@@ -3,8 +3,10 @@
 //!
 //! The transform is purely insertive (only single spaces are added, nothing is
 //! ever removed), idempotent, and conservative around Markdown structures:
-//! code span interiors and link URLs are left untouched, and the boundary of a
-//! code span / link is decided by its inner text.
+//! code span interiors and link URLs are left untouched, HTML tags and
+//! footnote references are opaque atoms, paired emphasis is only spaced on
+//! the outside of its markers, and the boundary of a code span / link is
+//! decided by its inner text.
 
 pub mod classify;
 #[cfg(feature = "bin")]

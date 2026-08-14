@@ -42,8 +42,8 @@ struct Cli {
     ext: Option<Vec<String>>,
 
     /// Number of walker threads (0 = auto)
-    #[arg(long)]
-    threads: Option<usize>,
+    #[arg(short, long)]
+    jobs: Option<usize>,
 }
 
 fn main() -> ExitCode {
@@ -74,8 +74,8 @@ fn main() -> ExitCode {
     if let Some(ext) = cli.ext {
         config.extensions = ext;
     }
-    if let Some(threads) = cli.threads {
-        config.threads = threads;
+    if let Some(jobs) = cli.jobs {
+        config.jobs = jobs;
     }
 
     let mode = if cli.check {

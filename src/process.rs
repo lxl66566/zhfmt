@@ -132,7 +132,7 @@ pub fn process_paths(paths: &[PathBuf], opts: &RunOptions) -> Result<Summary, Pr
         for d in rest {
             builder.add(d);
         }
-        builder.hidden(false).threads(opts.config.threads);
+        builder.hidden(false).threads(opts.config.jobs);
         if !opts.config.exclude.is_empty() {
             let mut ob = OverrideBuilder::new(".");
             for pattern in &opts.config.exclude {
