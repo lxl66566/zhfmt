@@ -205,11 +205,13 @@ fn has_target_extension(path: &Path, extensions: &[String]) -> bool {
 }
 
 /// Format `contents` and act according to the mode. Returns whether the
-/// content needs changes.
+/// content needs changes. `contents` is the pre-format input, required
+/// only by `Mode::Diff`; the mmap path passes `None` after dropping the
+/// mapping (Windows refuses to replace a file with a live mapping).
 fn finish(
     path: &Path,
     opts: &RunOptions,
-    contents: &[u8],
+    contents: Option<&[u8]>,
     formatted: Option<Vec<u8>>,
     meta: &fs::Metadata,
 ) -> Result<bool, ProcessError> {
@@ -219,7 +221,7 @@ fn finish(
     match opts.mode {
         Mode::Check => Ok(true),
         Mode::Diff => {
-            let old = String::from_utf8_lossy(contents);
+            let old = String::from_utf8_lossy(contents.unwrap_or_default());
             let new = String::from_utf8_lossy(&formatted);
             let diff = similar::TextDiff::from_lines(old.as_ref(), new.as_ref());
             let _guard = opts.print_lock.lock().unwrap();
@@ -261,7 +263,7 @@ pub fn process_file(path: &Path, opts: &RunOptions) -> Result<bool, ProcessError
         // rename would fail while our own handle is still open.
         drop(file);
         let formatted = crate::format(&buf);
-        finish(path, opts, &buf, formatted, &meta)
+        finish(path, opts, Some(&buf), formatted, &meta)
     } else {
         // SAFETY: the file is opened read-only and not modified by us while
         // mapped; see memmap2 docs for the external-modification caveats.
@@ -269,6 +271,15 @@ pub fn process_file(path: &Path, opts: &RunOptions) -> Result<bool, ProcessError
         #[cfg(unix)]
         let _ = mmap.advise(memmap2::Advice::Sequential);
         let formatted = crate::format(&mmap);
-        finish(path, opts, &mmap, formatted, &meta)
+        if formatted.is_some() && opts.mode == Mode::Write {
+            // On Windows, renaming over a file with a live mapping fails
+            // (Access denied), so release the mapping and handle before
+            // the write path runs. Diff mode does not write and keeps the
+            // mapping as the old contents.
+            drop(mmap);
+            drop(file);
+            return finish(path, opts, None, formatted, &meta);
+        }
+        finish(path, opts, Some(&mmap), formatted, &meta)
     }
 }

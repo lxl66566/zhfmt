@@ -182,3 +182,39 @@ fn unchanged_file_not_rewritten() {
     let after = fs::metadata(&md).unwrap().modified().unwrap();
     assert_eq!(before, after, "unchanged file must not be rewritten");
 }
+
+#[test]
+fn large_file_mmap_write_and_diff() {
+    // Larger than SMALL_FILE_THRESHOLD (256 KiB) so the mmap path is used.
+    // Windows cannot rename over a file with a live mapping, so this
+    // regression-tests that the mapping is dropped before writing.
+    let content = "中文test".repeat(70_000); // 420 KiB
+    let tmp = TempDir::new().unwrap();
+    let big = write_file(tmp.path(), "big.md", &content);
+
+    // --diff over the mmap path keeps the file untouched.
+    let out = zhfmt().arg("--diff").arg(&big).output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&big).unwrap(),
+        content,
+        "diff keeps file"
+    );
+
+    // Write over the mmap path.
+    let out = zhfmt().arg(&big).output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&big).unwrap(),
+        "中文 test ".repeat(70_000).trim_end()
+    );
+}
