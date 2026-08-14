@@ -194,8 +194,9 @@ pub(super) fn find_ascii(input: &[u8], from: usize, simd: fn(&[u8], usize) -> us
         if w1 & SWAR_HI != SWAR_HI {
             return ascii_in_first_word(input, from + 8);
         }
-        // Both words are non-ASCII: hand off to the long-range scanner.
-        return simd(input, from);
+        // Both words are non-ASCII: hand off to the long-range scanner,
+        // resuming past the 16 bytes already checked.
+        return simd(input, from + 16);
     }
     if from + 8 <= len {
         // SAFETY: `from + 8 <= len`.
@@ -207,7 +208,7 @@ pub(super) fn find_ascii(input: &[u8], from: usize, simd: fn(&[u8], usize) -> us
         if w & SWAR_HI != SWAR_HI {
             return ascii_in_first_word(input, from);
         }
-        return simd(input, from);
+        return simd(input, from + 8);
     }
     let mut i = from;
     while i < len && input[i] >= 0x80 {
