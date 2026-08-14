@@ -10,7 +10,7 @@ repository   = "https://github.com/lxl66566/zhfmt"
 license      = "MIT OR Apache-2.0"
 keywords     = ["chinese", "cjk", "formatter", "pangu", "whitespace"]
 categories   = ["command-line-utilities", "text-processing"]
-include      = ["/CHANGELOG.md", "/LICENSE-*", "/README.md", "/benches/**", "/src/**", "/tests/**"]
+include      = ["/CHANGELOG.md", "/LICENSE-*", "/README.md", "/src/**", "/tests/**"]
 
 [workspace]
 members = ["wasm"]

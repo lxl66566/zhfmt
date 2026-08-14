@@ -175,7 +175,7 @@ fn emoji_and_symbols() {
 fn boundary_at_edges() {
     changed!("中文a", "中文 a");
     changed!("a中文", "a 中文");
-    changed!("中文", "中文");
+    unchanged!("中文");
     unchanged!("a");
     unchanged!("中");
 }
