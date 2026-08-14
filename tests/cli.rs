@@ -93,6 +93,28 @@ fn stdin_pipeline_mode() {
 }
 
 #[test]
+fn stdin_rejects_check_and_diff() {
+    for flag in ["--check", "--diff"] {
+        let mut child = zhfmt()
+            .arg(flag)
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all("中文test".as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "flag: {flag}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("stdin"), "flag: {flag}, stderr: {stderr}");
+    }
+}
+
+#[test]
 fn walk_filters_by_extension_and_scans_hidden_files() {
     let tmp = TempDir::new().unwrap();
     let md = write_file(tmp.path(), "a.md", "中文test");

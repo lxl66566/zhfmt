@@ -51,6 +51,10 @@ fn main() -> ExitCode {
 
     // stdin -> stdout pipeline mode.
     if cli.paths.is_empty() && !std::io::stdin().is_terminal() {
+        if cli.check || cli.diff {
+            eprintln!("error: --check/--diff cannot be combined with stdin input");
+            return ExitCode::from(2);
+        }
         return run_stdin();
     }
 
