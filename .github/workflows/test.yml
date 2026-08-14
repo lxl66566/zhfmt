@@ -30,3 +30,19 @@ jobs:
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - name: cargo test
         run: cargo nextest run --all-features --locked --no-tests pass && cargo test --all-features --locked --doc
+
+  plugin:
+    name: prettier plugin
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      # Must match the wasm-bindgen version pinned in wasm/Cargo.toml.
+      - run: cargo install wasm-bindgen-cli@0.2.122 --locked
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test

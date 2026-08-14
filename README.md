@@ -38,6 +38,21 @@ zhfmt -j 4                  # 指定线程数
 
 更多边界样例（inline code、链接、强调、引号、日/韩文、畸形 UTF-8 等）请直接阅读 [src/engine/tests.rs](src/engine/tests.rs)。
 
+### 作为 prettier 插件使用
+
+[`prettier-plugin-zhfmt`](./prettier-plugin-zhfmt) 将引擎编译为 WASM 并包装 prettier 内置 markdown parser，在保留 prettier 原生格式化的同时补上中英文空格：
+
+```sh
+pnpm add -D prettier-plugin-zhfmt
+```
+
+```json
+// In your prettier.config.js
+{ "plugins": ["prettier-plugin-zhfmt"] }
+```
+
+详见[插件文档](./prettier-plugin-zhfmt/README.md)。
+
 ## 配置文件
 
 查找顺序：从当前目录逐级向上查找 `zhfmt.json` 或 `.zhfmt.json`，取最近；都没有则尝试全局配置（`$XDG_CONFIG_HOME/zhfmt/zhfmt.json`，Windows 下为 `%APPDATA%` 对应目录）；再没有则使用默认配置。

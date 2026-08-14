@@ -1,3 +1,6 @@
+[workspace]
+members = ["wasm"]
+
 [package]
 name         = "zhfmt"
 version      = "0.1.0"
@@ -54,7 +57,10 @@ default = ["bin"]
 # compile binary, allows to format folders
 bin     = ["clap", "dirs", "globset", "ignore", "memmap2", "serde", "serde_json", "similar", "snafu", "tempfile"]
 
-[lints.clippy]
+[lints]
+workspace = true
+
+[workspace.lints.clippy]
 all                     = { level = "warn", priority = -1 }
 cargo                   = { level = "warn", priority = -1 }
 doc_markdown            = "allow"
@@ -64,7 +70,7 @@ multiple_crate_versions = "allow"
 pedantic                = { level = "warn", priority = -1 }
 wildcard_imports        = "allow"
 
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code           = "allow"
 unused_qualifications = "warn"
 

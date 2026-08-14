@@ -27,14 +27,7 @@ temperature: 0
 - 正确性：默认行为不应该修改用户代码内的 hardcode 字符串，否则可能导致各种线上问题。如果默认只 fmt .md 等常见的文档类文件，也具有一定风险，因为 md 里可能有 code blocks 等。
   - 第一版可以先不感知这些，默认只按照 extension 过滤出要扫的文件，然后执行扫描；第二版再处理这些 edge case，比如怎么优化 code block in document，怎么优化让 js 等代码文件内的注释可以添加空格，但是字符串不添加，等等。
 - 配置文件：类似 oxc，使用 json 作为配置文件，类似地也需要扫描多个文件名（. 开头或者非 . 开头、global vs local）。配置里应该可以配置 file include/exclude 等常用自定义项。
-- 何时添加空格：遵循写作原则；需要测试大量 edge cases。我期望除了处理简单常见的数字 + 中文、字母 + 中文以外，至少还要处理下列内容：
-  ```md
-  在这个`myfunc`函数内
-  这是一个[link](https:Xxx)格式
-  ```
-  另外这些 case 也不算太 edge，你的测试用例需要包含更多的边缘情况。
 
-crate 偏好：
+### prettier plugin
 
-- 使用 ignore 并行扫描文件并默认 follows gitignore。（注意默认**需要**扫描 . 开头的 unix 隐藏文件）
-- clap with derive as cli
+项目可以被编译为 wasm，作为 prettier plugin 使用。开发使用 pnpm + wasm-bindgen-cli。

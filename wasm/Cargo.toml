@@ -1,0 +1,17 @@
+[package]
+name        = "zhfmt-wasm"
+version     = "0.1.0"
+edition     = "2024"
+publish     = false
+description = "WASM bindings for zhfmt, consumed by the prettier-plugin-zhfmt npm package"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zhfmt = { path = "..", default-features = false }
+# Must match the wasm-bindgen-cli version used to post-process the .wasm.
+wasm-bindgen = "=0.2.122"
+
+[lints]
+workspace = true

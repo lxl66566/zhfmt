@@ -1,0 +1,44 @@
+{
+  "name": "prettier-plugin-zhfmt",
+  "version": "0.1.0",
+  "description": "Prettier plugin that adds spaces between CJK and Latin characters, powered by the zhfmt WASM engine",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "wasm/",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "scripts": {
+    "prepublishOnly": "pnpm --dir .. run build:wasm",
+    "test": "node --test test.js"
+  },
+  "keywords": [
+    "prettier",
+    "prettier-plugin",
+    "chinese",
+    "cjk",
+    "pangu",
+    "spacing",
+    "formatter"
+  ],
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lxl66566/zhfmt.git",
+    "directory": "prettier-plugin-zhfmt"
+  },
+  "homepage": "https://github.com/lxl66566/zhfmt#readme",
+  "peerDependencies": {
+    "prettier": "^3.0.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
