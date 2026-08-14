@@ -37,7 +37,10 @@
 //! - Emphasis runs (`*...*`, `**...**`, `~~...~~`) act as wrappers when a matching closing run
 //!   exists within a bounded window (see [`MAX_EMPHASIS_SPAN`]): the outer boundary is decided by
 //!   the interior's content and spaces are only ever placed *outside* the markers, so `CG**鉴赏**`
-//!   becomes `CG **鉴赏**`, never `CG** 鉴赏**`. Unpaired runs stay transparent ([`Class::Soft`]).
+//!   becomes `CG **鉴赏**`, never `CG** 鉴赏**`. The closer search skips code spans and HTML
+//!   tags/comments atomically (a `*` inside them is code/markup, never a delimiter), so a stray
+//!   prose `*` can never pair into a span and desync the backtick pairing. Unpaired runs stay
+//!   transparent ([`Class::Soft`]).
 //!
 //! Module layout: [`scan`] locates the next interesting byte, [`boundary`]
 //! decides effective classes and construct extents, and this module holds the
@@ -54,8 +57,9 @@ use crate::classify::{Class, classify_at};
 mod scan;
 
 use boundary::{
-    MAX_EMPHASIS_SPAN, crosses, find_closing_run, find_comment_end, find_url_end, is_space_byte,
-    last_content_class, lookback_class, next_is_latin, peek_forward_class, scan_html_tag,
+    MAX_EMPHASIS_SPAN, crosses, find_closing_run, find_code_span, find_comment_end, find_url_end,
+    is_space_byte, last_content_class, lookback_class, next_is_latin, peek_forward_class,
+    prose_first_class, prose_last_class, run_len, scan_html_tag,
 };
 use scan::{Scan, find_ascii, find_wake};
 
@@ -211,30 +215,9 @@ impl<'a> Formatter<'a> {
     /// A backtick run: try to match a code span. Unclosed runs are treated as
     /// transparent delimiters.
     fn on_backtick(&mut self) {
-        let len = self.input.len();
-        let mut n = 0;
-        while self.pos + n < len && self.input[self.pos + n] == b'`' {
-            n += 1;
-        }
+        let n = run_len(self.input, self.pos, b'`');
         // Find the closing run of exactly the same length.
-        let mut scan = self.pos + n;
-        let close = loop {
-            match memchr(b'`', &self.input[scan..]) {
-                Some(off) => {
-                    let c = scan + off;
-                    let mut m = 0;
-                    while c + m < len && self.input[c + m] == b'`' {
-                        m += 1;
-                    }
-                    if m == n {
-                        break Some(c);
-                    }
-                    scan = c + m;
-                },
-                None => break None,
-            }
-        };
-        match close {
+        match find_code_span(self.input, self.pos, n) {
             Some(c) => {
                 let interior = &self.input[self.pos + n..c];
                 let first = peek_forward_class(interior, 0);
@@ -245,10 +228,8 @@ impl<'a> Formatter<'a> {
                 self.pos = c + n;
                 self.insert_right_boundary();
             },
-            None => {
-                // Unclosed: treat as transparent, keep `prev`.
-                self.pos += n;
-            },
+            // Unclosed: treat as transparent, keep `prev`.
+            None => self.pos += n,
         }
     }
 
@@ -309,14 +290,16 @@ impl<'a> Formatter<'a> {
             let until = (after + MAX_EMPHASIS_SPAN).min(len);
             if let Some(close) = find_closing_run(self.input, after, until, c, n) {
                 let interior = &self.input[after..close];
-                let first = peek_forward_class(interior, 0);
+                // Prose interior: paired code spans inside decide the
+                // wrapper's boundary by their content.
+                let first = prose_first_class(interior);
                 // `self.pos > self.last`: a CJK char's forward peek may have
                 // already inserted a space at this exact position.
                 if self.pos > self.last && crosses(self.prev, first) {
                     self.insert_space(self.pos);
                 }
                 self.splice_formatted(after..close);
-                self.prev = last_content_class(interior);
+                self.prev = prose_last_class(interior);
                 self.pos = close + n;
                 self.insert_right_boundary();
                 return;
@@ -338,7 +321,9 @@ impl<'a> Formatter<'a> {
                 return;
             }
         }
-        let first = peek_forward_class(self.input, self.pos + 1);
+        // Link text is prose: a code span inside it decides the boundary by
+        // its interior content.
+        let first = prose_first_class(&self.input[self.pos + 1..]);
         if crosses(self.prev, first) {
             self.insert_space(self.pos);
         }
@@ -357,7 +342,7 @@ impl<'a> Formatter<'a> {
                 // The link text is what decides the boundary, not the URL.
                 if let Some(open) = self.last_bracket_open.take() {
                     if open < self.pos {
-                        self.prev = last_content_class(&self.input[open + 1..self.pos]);
+                        self.prev = prose_last_class(&self.input[open + 1..self.pos]);
                     }
                 }
                 self.pos = end + 1;

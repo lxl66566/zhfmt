@@ -410,6 +410,45 @@ fn emphasis_pairing_window() {
 }
 
 #[test]
+fn emphasis_never_pairs_into_code_spans() {
+    // Regression: a stray `*` in prose used to pair with the `*` inside a
+    // later code span, desyncing the backtick pairing and stuffing spaces
+    // INSIDE the following spans (`匹配` aabbbbc``).
+    unchanged!(
+        "乘法用*表示。一阶段：`ab*c` 匹配 `aabbbbc`；二阶段：`aa*a` 匹配 `baab`；boss \
+         战：`a.*b.+c` 匹配 `cababbcbc`。"
+    );
+    changed!(
+        "用*表。`ab*c`匹配`aabbbbc`。",
+        "用*表。`ab*c` 匹配 `aabbbbc`。"
+    );
+    // A `~~` in prose must not pair with one inside a span either.
+    changed!("划掉~~再说`a~~b`看", "划掉~~再说 `a~~b` 看");
+    // A `*` inside an HTML tag attribute is markup, not a closer.
+    unchanged!("重点*事项<img alt=\"*\">图");
+}
+
+#[test]
+fn emphasis_wrapping_code_spans() {
+    // Emphasis legitimately containing a code span: the wrapper's boundary
+    // is decided by the span's interior content.
+    changed!(
+        "一阶段：*`ab*c`*匹配`aabbbbc`。",
+        "一阶段：*`ab*c`* 匹配 `aabbbbc`。"
+    );
+    changed!("中文**`code`x**结尾", "中文 **`code`x** 结尾");
+    changed!("中**`代码`文**尾", "中**`代码`文**尾");
+}
+
+#[test]
+fn link_text_with_code_spans() {
+    // Code spans inside link text decide the link's boundary by their
+    // interior; the span itself is never touched.
+    changed!("见[`c`](u)文", "见 [`c`](u) 文");
+    unchanged!("见[`中文`](u)文");
+}
+
+#[test]
 fn pathological_emphasis_input_stays_fast() {
     // Regression guard for the pairing window: without it, every `*` run
     // rescans the rest of the input (O(n^2)). Sized to stay quick in debug

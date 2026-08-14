@@ -8,6 +8,11 @@
 //! - forward: [`peek_forward_class`] / [`next_is_latin`]
 //! - backward: [`lookback_class`] / [`last_content_class`]
 //!
+//! For *prose* interiors (emphasis, link text) the span-aware variants
+//! [`prose_first_class`] / [`prose_last_class`] additionally look through
+//! code spans (paired spans decide by their interior, unpaired backticks
+//! are transparent).
+//!
 //! The structural scanners ([`scan_html_tag`], [`find_url_end`],
 //! [`find_closing_run`]) measure how far an opaque or skipped construct
 //! extends, which the [`Formatter`](super::Formatter) event handlers need to
@@ -15,7 +20,7 @@
 // Hot-path helpers are intentionally force-inlined.
 #![allow(clippy::inline_always)]
 
-use memchr::memchr;
+use memchr::{memchr, memchr3};
 
 use crate::classify::{Class, ascii_class, char_start_before, classify_at};
 
@@ -116,10 +121,96 @@ pub(super) fn last_content_class(text: &[u8]) -> Option<Class> {
     prev
 }
 
+/// Class of the first content char in *prose* `text` (emphasis or
+/// link-text interior): like [`peek_forward_class`], but code-span aware —
+/// a paired span decides the boundary by its interior content (the same
+/// rule a bare span follows in the main scan), and an unpaired backtick
+/// run is transparent.
+pub(super) fn prose_first_class(text: &[u8]) -> Option<Class> {
+    let mut i = 0;
+    while i < text.len() {
+        if text[i] == b'`' {
+            let k = run_len(text, i, b'`');
+            if let Some(close) = find_code_span(text, i, k) {
+                // The interior is code: its raw first content char decides,
+                // without looking through it any further.
+                return peek_forward_class(&text[i + k..close], 0);
+            }
+            i += k;
+        } else {
+            match classify_at(text, i) {
+                (Class::Soft, _) => i += 1,
+                (Class::Space | Class::Hard, _) => return None,
+                (c, _) => return Some(c),
+            }
+        }
+    }
+    None
+}
+
+/// Class of the last content char in *prose* `text` (emphasis or
+/// link-text interior): like [`last_content_class`], but code-span aware.
+/// Replays the main scanner's span pairing left to right so paired spans
+/// decide by their interior and unpaired backtick runs stay transparent.
+pub(super) fn prose_last_class(text: &[u8]) -> Option<Class> {
+    let mut last = None;
+    let mut i = 0;
+    while i < text.len() {
+        if text[i] == b'`' {
+            let k = run_len(text, i, b'`');
+            match find_code_span(text, i, k) {
+                Some(close) => {
+                    last = last_content_class(&text[i + k..close]);
+                    i = close + k;
+                },
+                None => i += k,
+            }
+        } else {
+            let (class, len) = classify_at(text, i);
+            match class {
+                Class::Soft | Class::Space => {},
+                // Brackets block the boundary, consistent with the raw
+                // lookup; later content overrides them.
+                Class::Hard => last = None,
+                c => last = Some(c),
+            }
+            i += len;
+        }
+    }
+    last
+}
+
 /// Whether this byte is ASCII whitespace. Multibyte chars (>= 0x80) are not.
 #[inline(always)]
 pub(super) const fn is_space_byte(b: u8) -> bool {
     b < 0x80 && matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
+}
+
+/// Length of the run of byte `c` starting at `pos`.
+#[inline(always)]
+pub(super) fn run_len(input: &[u8], pos: usize, c: u8) -> usize {
+    let mut n = 0;
+    while input.get(pos + n) == Some(&c) {
+        n += 1;
+    }
+    n
+}
+
+/// Find the closing backtick run for the opening run of length `n` at
+/// `pos`: the next run of *exactly* the same length (CommonMark pairing).
+/// Returns the closer's start position, or `None` if the run is unclosed
+/// (a literal, transparent backtick).
+pub(super) fn find_code_span(input: &[u8], pos: usize, n: usize) -> Option<usize> {
+    let mut scan = pos + n;
+    while let Some(off) = memchr(b'`', &input[scan..]) {
+        let c = scan + off;
+        let m = run_len(input, c, b'`');
+        if m == n {
+            return Some(c);
+        }
+        scan = c + m;
+    }
+    None
 }
 
 /// Maximum distance between emphasis delimiters for them to pair: the
@@ -133,6 +224,12 @@ pub(super) const MAX_EMPHASIS_SPAN: usize = 4096;
 /// searching from `from` up to `until` (exclusive bound for the closer's
 /// start). A closing run must be immediately preceded by a non-whitespace
 /// byte (crude CommonMark right-flanking).
+///
+/// Code spans and HTML tags/comments are skipped atomically: a delimiter
+/// inside them is code or markup, never an emphasis marker. Skipping
+/// spans mirrors the main scanner's pairing, so a paired wrapper can
+/// never jump *into* a span — which would desync all later backtick
+/// pairing and stuff spaces inside code spans.
 pub(super) fn find_closing_run(
     input: &[u8],
     from: usize,
@@ -141,16 +238,39 @@ pub(super) fn find_closing_run(
     n: usize,
 ) -> Option<usize> {
     let mut scan = from;
-    while let Some(off) = memchr(c, input.get(scan..until).unwrap_or(&[])) {
+    while let Some(off) = memchr3(b'`', b'<', c, input.get(scan..until).unwrap_or(&[])) {
         let start = scan + off;
-        let mut m = 0;
-        while start + m < input.len() && input[start + m] == c {
-            m += 1;
+        match input[start] {
+            b'`' => {
+                let k = run_len(input, start, b'`');
+                // Skip the whole span when the run pairs (the closer may
+                // lie beyond `until`: the window then holds no valid
+                // closer). An unpaired run is a literal and its interior
+                // stays prose.
+                scan = find_code_span(input, start, k)
+                    .map_or(start + k, |close| (close + k).min(until));
+            },
+            b'<' => {
+                scan = if input[start..].starts_with(b"<!--")
+                    && let Some(end) = find_comment_end(input, start)
+                {
+                    end
+                } else {
+                    // A `<` that opens no valid tag is a literal char.
+                    scan_html_tag(input, start).unwrap_or(start + 1)
+                }
+                .min(until);
+            },
+            // The delimiter byte `c` (`*` or `~`).
+            _ => {
+                let m = run_len(input, start, c);
+                if m == n && start > 0 && !is_space_byte(input[start - 1]) {
+                    return Some(start);
+                }
+                // Runs of another length are atomic; skip the whole run.
+                scan = start + m;
+            },
         }
-        if m == n && start > 0 && !is_space_byte(input[start - 1]) {
-            return Some(start);
-        }
-        scan = start + m;
     }
     None
 }
