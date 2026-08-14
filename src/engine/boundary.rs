@@ -141,29 +141,33 @@ pub(super) fn find_closing_run(input: &[u8], from: usize, c: u8, n: usize) -> Op
     None
 }
 
-/// Scan an HTML tag / comment / processing instruction starting at `<`
-/// (position `pos`). Returns the position just past the closing `>`, or
-/// `None` if `<` does not open a valid tag. Quoted attribute values are
-/// skipped, so `>` inside `title="..."` never ends the tag early and
-/// attribute interiors are never inspected.
+/// Find the end of an HTML comment starting at `pos` (which must point at
+/// `<!--`). Returns the position just past the closing `-->`, or `None` if
+/// the comment is unterminated. A `>` inside the comment body (e.g.
+/// `<!-- a>b -->`) does not close it.
+pub(super) fn find_comment_end(input: &[u8], pos: usize) -> Option<usize> {
+    debug_assert!(input[pos..].starts_with(b"<!--"));
+    let mut i = pos + 4;
+    loop {
+        // SAFETY-free: `gt >= pos + 4`, so `gt - 2` never underflows.
+        let gt = memchr(b'>', &input[i..]).map(|o| i + o)?;
+        if &input[gt - 2..gt] == b"--" {
+            return Some(gt + 1);
+        }
+        i = gt + 1;
+    }
+}
+
+/// Scan an HTML tag / processing instruction starting at `<` (position
+/// `pos`). Returns the position just past the closing `>`, or `None` if `<`
+/// does not open a valid tag. Quoted attribute values are skipped, so `>`
+/// inside `title="..."` never ends the tag early and attribute interiors
+/// are never inspected. Comments are handled separately (see
+/// [`find_comment_end`]); `<!DOCTYPE ...>` and friends run to the next `>`.
 pub(super) fn scan_html_tag(input: &[u8], pos: usize) -> Option<usize> {
     let mut i = pos + 1;
     match *input.get(i)? {
-        b'!' => {
-            // Comment `<!-- ... -->`; anything else (`<!DOCTYPE ...>`,
-            // `<![CDATA[...]]>`) runs to the next `>`.
-            if input[i..].starts_with(b"<!--") {
-                i += 4;
-                loop {
-                    let gt = memchr(b'>', &input[i..]).map(|o| i + o)?;
-                    if &input[gt - 2..gt] == b"--" {
-                        return Some(gt + 1);
-                    }
-                    i = gt + 1;
-                }
-            }
-            memchr(b'>', &input[i..]).map(|o| i + o + 1)
-        },
+        b'!' | b'?' => memchr(b'>', &input[i..]).map(|o| i + o + 1),
         // Processing instruction `<? ... >`.
         b'?' => memchr(b'>', &input[i..]).map(|o| i + o + 1),
         _ => {

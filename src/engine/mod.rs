@@ -30,9 +30,10 @@
 //!
 //! - Code spans (`` `...` ``) and link URLs (`[text](url)`) are skipped over; the boundary of a
 //!   code span / link is decided by the first/last *content* character inside it.
-//! - HTML tags / comments (`<...>`, `<!-- ... -->`) and footnote references (`[^id]`) are opaque
-//!   atoms: their interiors (including attribute values such as `title="中文"`) are never
-//!   formatted, and they block boundaries on both sides.
+//! - HTML tags (`<...>`) and footnote references (`[^id]`) are opaque atoms: their interiors
+//!   (including attribute values such as `title="中文"`) are never formatted, and they block
+//!   boundaries on both sides. HTML comments (`<!-- ... -->`) keep the opaque boundary behavior but
+//!   their body is prose and gets formatted recursively.
 //! - Emphasis runs (`*...*`, `**...**`, `~~...~~`) act as wrappers when a matching closing run
 //!   exists: the outer boundary is decided by the interior's content and spaces are only ever
 //!   placed *outside* the markers, so `CG**鉴赏**` becomes `CG **鉴赏**`, never `CG** 鉴赏**`.
@@ -53,8 +54,8 @@ use crate::classify::{Class, classify_at};
 mod scan;
 
 use boundary::{
-    crosses, find_closing_run, find_url_end, is_space_byte, last_content_class, lookback_class,
-    next_is_latin, peek_forward_class, scan_html_tag,
+    crosses, find_closing_run, find_comment_end, find_url_end, is_space_byte, last_content_class,
+    lookback_class, next_is_latin, peek_forward_class, scan_html_tag,
 };
 use scan::{Scan, find_ascii, find_wake};
 
@@ -251,12 +252,34 @@ impl<'a> Formatter<'a> {
         }
     }
 
+    /// Splice the recursively formatted `input[range]` into the output,
+    /// flushing pending bytes. Interior text of wrapper constructs
+    /// (emphasis, HTML comments) is itself prose and gets formatted.
+    fn splice_formatted(&mut self, range: std::ops::Range<usize>) {
+        if let Some(inner) = format(&self.input[range.clone()]) {
+            let out = self.out.get_or_insert_with(|| fresh_out(self.input.len()));
+            out.extend_from_slice(&self.input[self.last..range.start]);
+            out.extend_from_slice(&inner);
+            self.last = range.end;
+        }
+    }
+
     /// `<`: an HTML tag / comment / processing instruction is an opaque atom
     /// — its interior (including attribute values such as `title="中文"` or
     /// Vue slot names like `<template #廃村少女2>`) is never formatted, and
-    /// it blocks boundaries on both sides. A `<` that does not start a valid
-    /// tag is a literal char and blocks the boundary as well.
+    /// it blocks boundaries on both sides. The exception is HTML comments:
+    /// their body is prose and is formatted recursively, while the comment
+    /// itself still blocks boundaries on both sides. A `<` that does not
+    /// start a valid tag is a literal char and blocks the boundary as well.
     fn on_tag(&mut self) {
+        if self.input[self.pos..].starts_with(b"<!--")
+            && let Some(end) = find_comment_end(self.input, self.pos)
+        {
+            self.splice_formatted(self.pos + 4..end - 3);
+            self.prev = Some(Class::Other);
+            self.pos = end;
+            return;
+        }
         self.prev = Some(Class::Other);
         self.pos = scan_html_tag(self.input, self.pos).unwrap_or(self.pos + 1);
     }
@@ -287,12 +310,7 @@ impl<'a> Formatter<'a> {
                 if self.pos > self.last && crosses(self.prev, first) {
                     self.insert_space(self.pos);
                 }
-                if let Some(inner) = format(interior) {
-                    let out = self.out.get_or_insert_with(|| fresh_out(self.input.len()));
-                    out.extend_from_slice(&self.input[self.last..after]);
-                    out.extend_from_slice(&inner);
-                    self.last = close;
-                }
+                self.splice_formatted(after..close);
                 self.prev = last_content_class(interior);
                 self.pos = close + n;
                 self.insert_right_boundary();

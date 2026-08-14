@@ -191,6 +191,7 @@ fn idempotent() {
         "他说“hello”了",
         "galgame CG**鉴赏**",
         "<span title=\"你知道的太多了\">测试text</span>",
+        "<!-- 注释comment -->后文",
         "负面消息[^1][^2]让我",
         "解法([ref](url))：",
     ];
@@ -307,8 +308,18 @@ fn html_tags_opaque() {
     unchanged!("崩溃<br/>![空指针](x.png)");
     unchanged!("便宜<br/>延迟低");
     unchanged!("存疑<br/>来源请求");
-    // Comments are opaque too.
-    unchanged!("<!-- 注释comment -->后文");
+    // Comments: the body is prose and gets formatted, but the comment
+    // blocks boundaries on both sides.
+    changed!("<!-- 注释comment -->", "<!-- 注释 comment -->");
+    changed!("<!-- 注释x>注释y中文z -->", "<!-- 注释 x>注释 y 中文 z -->");
+    unchanged!("中文<!--注释-->中文");
+    unchanged!("<!-- 注释 -->后文");
+    // Non-comment declarations stay opaque.
+    unchanged!("<!DOCTYPE 中文x系统>");
+    // Unterminated comment: `<!--` falls back to plain text (the CJK/Latin
+    // boundary inside still applies, since it is no longer a comment).
+    changed!("<!-- 未闭合注释comment", "<!-- 未闭合注释 comment");
+    unchanged!("中文<!-- 未闭合");
     // A `<` that does not open a valid tag is a literal char.
     unchanged!("a < b 并且 c > d");
     // The literal `<` blocks its own seam, but the `2|中` boundary has no
