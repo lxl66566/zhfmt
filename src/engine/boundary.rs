@@ -125,6 +125,11 @@ pub(super) const fn is_space_byte(b: u8) -> bool {
 /// Find a closing emphasis run of delimiter `c` with exactly length `n`,
 /// searching from `from`. A closing run must be immediately preceded by a
 /// non-whitespace byte (crude CommonMark right-flanking).
+///
+/// Known limit: pathological inputs where every candidate closer is
+/// rejected (e.g. `*a *a *a ...`) make each opening run rescan to the end
+/// of the input, degrading to O(n²). Accepted for the document sizes
+/// zhfmt targets.
 pub(super) fn find_closing_run(input: &[u8], from: usize, c: u8, n: usize) -> Option<usize> {
     let mut scan = from;
     while let Some(off) = memchr(c, &input[scan..]) {

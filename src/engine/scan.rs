@@ -49,10 +49,10 @@ const fn wake_in_word(w: u64) -> bool {
         || has_byte(w, b'~')
 }
 
-// Long-range scanner continuations: SWAR loops used directly on non-x86_64
-// and as the fallback behind the SIMD scanners on x86_64 (see [`Scan`]).
-// On x86_64 the SSE2 scanners are always available, so the SWAR loops are
-// only referenced on other architectures.
+// Long-range scanner continuations: SWAR loops used directly on
+// non-x86_64 architectures. On x86_64 the SSE2 scanners are part of the
+// baseline and always selected (see [`Scan::select`]), so these loops are
+// dead code there.
 #[cfg_attr(target_arch = "x86_64", allow(dead_code))]
 mod scalar {
     use super::{SWAR_HI, is_wake_byte, wake_in_word};
