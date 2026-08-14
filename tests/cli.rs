@@ -140,6 +140,25 @@ fn config_file_exclude() {
 }
 
 #[test]
+fn config_discovered_from_parent_directory() {
+    let tmp = TempDir::new().unwrap();
+    // Config in the parent dir customizes extensions; run from a child dir.
+    write_file(tmp.path(), "zhfmt.json", r#"{ "extensions": ["zz"] }"#);
+    let child = tmp.path().join("child");
+    fs::create_dir(&child).unwrap();
+    let zz = write_file(&child, "a.zz", "中文test");
+    let md = write_file(&child, "b.md", "中文test");
+    let out = zhfmt().current_dir(&child).arg(".").output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(fs::read_to_string(&zz).unwrap(), "中文 test");
+    assert_eq!(fs::read_to_string(&md).unwrap(), "中文test");
+}
+
+#[test]
 fn invalid_config_exits_with_code_2() {
     let tmp = TempDir::new().unwrap();
     let cfg = write_file(tmp.path(), "bad.json", "{ not json");

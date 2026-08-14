@@ -62,13 +62,20 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             },
         },
-        None => match config::discover(&PathBuf::from(".")).map(|p| config::load_file(&p)) {
-            Some(Ok(c)) => c,
-            Some(Err(e)) => {
-                eprintln!("error: {e}");
-                return ExitCode::from(2);
-            },
-            None => Config::default(),
+        None => {
+            // Discover from the real working directory: `Path::new(".").ancestors()`
+            // only yields `[".", ""]`, which would never leave the cwd.
+            let discovered = std::env::current_dir()
+                .ok()
+                .and_then(|cwd| config::discover(&cwd));
+            match discovered.map(|p| config::load_file(&p)) {
+                Some(Ok(c)) => c,
+                Some(Err(e)) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(2);
+                },
+                None => Config::default(),
+            }
         },
     };
     if let Some(ext) = cli.ext {

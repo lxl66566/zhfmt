@@ -127,3 +127,26 @@ pub fn discover(start: &Path) -> Option<PathBuf> {
     let global = config_dir.join("zhfmt").join(CONFIG_NAMES[0]);
     global.is_file().then_some(global)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discover_walks_up_to_parent_dirs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cfg = tmp.path().join(".zhfmt.json");
+        fs::write(&cfg, "{}").unwrap();
+        // A nested dir with no config of its own finds the parent's config.
+        let deep = tmp.path().join("a").join("b");
+        fs::create_dir_all(&deep).unwrap();
+        assert_eq!(discover(&deep), Some(cfg.clone()));
+        assert_eq!(discover(tmp.path()), Some(cfg));
+    }
+
+    #[test]
+    fn discover_missing_returns_none() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert_eq!(discover(tmp.path()), None);
+    }
+}
