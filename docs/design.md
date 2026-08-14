@@ -169,19 +169,21 @@ SIMD 细节（`engine::x86`）：
 
 方法：criterion，`cargo bench --bench single_thread`（引擎吞吐）与
 `cargo bench --bench multi_files`（端到端，256 文件 × ~16 KiB，check 模式）。
-对比基线为 SIMD 化 + run 跳跃之前的实现（SWAR 8B/步 + 逐字符多字节处理）。
 
-结果（Windows x86_64 / AVX2，同机多轮运行的代表值；**本机波动可达 ±20%，
-单轮数字仅供参考**）：
+结果（Linux x86_64 / AVX2，AMD Zen 5，`--sample-size 20` 多轮代表值。
 
-| 场景 | 优化前 | 优化后 | 提升 |
-|---|---|---|---|
-| 纯 ASCII | 3.4 GiB/s | ~16 GiB/s | ~4.7x |
-| 混合中英文档 | 222 MiB/s | ~520 MiB/s | ~2.3x |
-| 纯中文 | 88 MiB/s | ~30–50 GiB/s | ~350x+ |
-| 已格式化 | 187 MiB/s | ~430 MiB/s | ~2.3x |
-| 混合文本 1KB–4MB | ~240 MiB/s | ~300–440 MiB/s | ~1.3–1.8x |
-| 256 文件端到端 | 17.4 ms | ~10 ms | ~1.7x |
+| 场景 | 输入大小 | 吞吐 / 耗时 |
+|---|---|---|
+| 纯 ASCII | ~0.89 MiB | ~43.7 GiB/s |
+| 纯中文 | ~1.03 MiB | ~74.9 GiB/s |
+| 混合中英文档 | ~0.68 MiB | ~1.27 GiB/s |
+| 已格式化 | ~0.33 MiB | ~1.10 GiB/s |
+| 混合文本 1KB–4MB | ~1.5 KB–5.97 MB | ~700 MiB/s |
+| 256 文件端到端（check） | 256 × ~16 KiB | ~3.3 ms |
+
+历史对比（Windows x86_64 / AVX2 开发机，相对 SIMD 化 + run 跳跃之前的
+实现 SWAR 8B/步 + 逐字符多字节处理）：纯 ASCII ~4.7x、混合中英文档 ~2.3x、
+纯中文 ~350x+、已格式化 ~2.3x、256 文件端到端 ~1.7x。
 
 优化来源拆解：
 
