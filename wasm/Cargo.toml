@@ -1,6 +1,6 @@
 [package]
 name        = "zhfmt-wasm"
-version     = "0.1.0"
+version     = "0.1.1"
 edition     = "2024"
 description = "WASM bindings for zhfmt, consumed by the prettier-plugin-zhfmt npm package"
 publish     = false

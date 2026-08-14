@@ -1,6 +1,6 @@
 {
   "name": "prettier-plugin-zhfmt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Prettier plugin that adds spaces between CJK and Latin characters, powered by the zhfmt WASM engine",
   "main": "index.js",
   "types": "index.d.ts",

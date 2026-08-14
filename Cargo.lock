@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "zhfmt"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "criterion",
@@ -992,7 +992,7 @@ dependencies = [
 
 [[package]]
 name = "zhfmt-wasm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "wasm-bindgen",
  "zhfmt",
