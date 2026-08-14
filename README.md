@@ -1,1 +1,74 @@
-# xxx
+# zhfmt
+
+高性能中文文档批量格式化工具：遵循中文写作原则（盘古之白），在中文与英文/数字之间自动添加空格。
+
+设计目标：
+
+- 安全：变换是纯粹插入式的（只插入单个空格，从不删除任何内容），幂等，可反复运行；inline code 与代码块内部、链接 URL 一律不改动
+- blazing fast：SWAR 扫描 + COW，无任何正则；已经格式化好的文件只扫描、不分配 buffer、不写回；多文件并行处理
+- 克制：相比 autocorrect 等工具，zhfmt 只做加空格这一件事，不产生预期外的修改
+
+## 安装
+
+前往 [Release](https://github.com/lxl66566/zhfmt/Releases) 下载 prebuilt binary。
+
+## 使用
+
+```sh
+zhfmt                       # 格式化当前目录下所有文档类文件（递归）
+zhfmt docs/ README.md       # 格式化指定路径（目录递归，文件总是处理）
+zhfmt --check               # CI 模式：只报告会变化的文件，存在差异时退出码为 1
+zhfmt --diff                # 打印 unified diff，不写回，退出码同上
+cat a.md | zhfmt            # 管道模式：stdin -> stdout
+zhfmt --ext md,rst docs/    # 覆盖要处理的扩展名列表
+zhfmt --threads 4           # 指定 walker 线程数（默认自动）
+```
+
+- 默认只格式化以下扩展名文件：`md, markdown, mdx, txt, rst`；显式传入的文件路径不受限制
+- 文件扫描遵循 `.gitignore`
+- 退出码：0 正常；1 `--check`/`--diff` 发现差异；2 错误
+
+效果示例：
+
+```text
+在这个`myfunc`函数内        ->  在这个 `myfunc` 函数内
+这是一个[link](https:Xxx)格式  ->  这是一个 [link](https:Xxx) 格式
+我有3个苹果                 ->  我有 3 个苹果
+中文，english               ->  不变（全角标点阻断边界）
+```
+
+更多边界样例（inline code、链接、强调、引号、日/韩文、畸形 UTF-8 等）请直接阅读 [src/engine/tests.rs](src/engine/tests.rs)。
+
+## 配置文件
+
+查找顺序：从当前目录逐级向上查找 `zhfmt.json` 或 `.zhfmt.json`，取最近的一份；都没有则尝试全局配置（`$XDG_CONFIG_HOME/zhfmt/zhfmt.json`，Windows 下为 `%APPDATA%` 对应目录）；再没有则使用默认配置。
+
+```json
+{
+  "extensions": ["md", "markdown", "mdx", "txt", "rst"],
+  "include": ["docs/*.adoc"],
+  "exclude": ["node_modules/", "target/"],
+  "threads": 0
+}
+```
+
+- `extensions`：要处理的扩展名白名单（不带点），整体覆盖默认值
+- `include`：额外的 glob 白名单，命中后即使扩展名不匹配也会处理
+- `exclude`：glob 黑名单，相对路径匹配
+- `threads`：walker 线程数，0 或 null 为自动
+
+## 算法简述
+
+核心在 [src/engine/mod.rs](src/engine/mod.rs)，字符分类在 [src/classify.rs](src/classify.rs)。
+
+1. 字符分类：每个字符被归为 `Latin`（a-zA-Z0-9）、`CJK`（汉字/假名/韩文/全角字母数字）、`Neutral`（全角标点）、`Soft`（透明界定符：引号、`*`、`(` 等）、`Hard`（结构界定符：`` ` ``、`[`、`]`）、`Space`、`Other`
+2. SWAR 扫描：边界只可能出现在非 ASCII 字节或 Hard 界定符处，因此主循环以 8 字节/步跳过无关内容，只在"唤醒字节"处做标量处理
+3. 边界判定：仅当有效边界两侧分别为 `Latin` 与 `CJK` 时插入一个空格；`Soft` 字符会被透视（取内部最近的内容字符参与判定）；`Neutral`、`Other`、空白都会阻断边界
+4. 结构跳过：backtick code span（含成对的 fenced code block）内部原样跳过，其左右边界分别由内部首/尾内容字符决定；`[text](url)` 的 text 按正文处理，url 整体跳过且不影响边界
+5. 惰性输出：扫描到第一个插入点才分配输出缓冲并开始拷贝；全文无插入则返回"无变化"，调用方跳过写回
+
+畸形 UTF-8 字节被归类为 `Other` 并原样透传，不会导致错误或误改。
+
+## License
+
+MIT OR Apache-2.0

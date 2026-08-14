@@ -1,0 +1,144 @@
+#![cfg(feature = "bin")]
+
+use std::{
+    io::{IsTerminal, Read, Write},
+    path::PathBuf,
+    process::ExitCode,
+    sync::Mutex,
+};
+
+use clap::Parser;
+use zhfmt::{
+    config::{self, Config},
+    process::{self, Mode, RunOptions},
+};
+
+#[derive(Parser)]
+#[command(version, about, long_about = None, after_help = r#"Examples:
+  zhfmt                     # format all doc files under the current directory
+  zhfmt docs/ README.md     # format specific paths
+  zhfmt --check             # CI mode: report files that would change, exit 1
+  zhfmt --diff              # print a unified diff without writing
+  cat a.md | zhfmt          # stdin -> stdout
+"#)]
+struct Cli {
+    /// Files or directories to process (defaults to the current directory)
+    paths: Vec<PathBuf>,
+
+    /// Only report files that would change; exit code 1 if any
+    #[arg(long)]
+    check: bool,
+
+    /// Print a unified diff instead of writing
+    #[arg(long, conflicts_with = "check")]
+    diff: bool,
+
+    /// Path to a config file (zhfmt.json)
+    #[arg(long)]
+    config: Option<PathBuf>,
+
+    /// Override the file extensions to process (comma separated)
+    #[arg(long, value_delimiter = ',')]
+    ext: Option<Vec<String>>,
+
+    /// Number of walker threads (0 = auto)
+    #[arg(long)]
+    threads: Option<usize>,
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+
+    // stdin -> stdout pipeline mode.
+    if cli.paths.is_empty() && !std::io::stdin().is_terminal() {
+        return run_stdin();
+    }
+
+    let mut config = match &cli.config {
+        Some(path) => match config::load_file(path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            },
+        },
+        None => match config::discover(&PathBuf::from(".")).map(|p| config::load_file(&p)) {
+            Some(Ok(c)) => c,
+            Some(Err(e)) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            },
+            None => Config::default(),
+        },
+    };
+    if let Some(ext) = cli.ext {
+        config.extensions = ext;
+    }
+    if let Some(threads) = cli.threads {
+        config.threads = threads;
+    }
+
+    let mode = if cli.check {
+        Mode::Check
+    } else if cli.diff {
+        Mode::Diff
+    } else {
+        Mode::Write
+    };
+    let opts = RunOptions {
+        mode,
+        config,
+        print_lock: Mutex::new(()),
+    };
+
+    let paths = if cli.paths.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        cli.paths
+    };
+
+    match process::process_paths(&paths, &opts) {
+        Ok(summary) => {
+            eprintln!(
+                "{} {} files, {} changed, {} errors.",
+                match mode {
+                    Mode::Check => "Checked",
+                    Mode::Diff => "Diffed",
+                    Mode::Write => "Processed",
+                },
+                summary.processed,
+                summary.changed,
+                summary.errors,
+            );
+            if summary.errors > 0 {
+                ExitCode::from(2)
+            } else if mode != Mode::Write && summary.changed > 0 {
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
+            }
+        },
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(2)
+        },
+    }
+}
+
+fn run_stdin() -> ExitCode {
+    let mut buf = Vec::new();
+    if let Err(e) = std::io::stdin().read_to_end(&mut buf) {
+        eprintln!("error: failed to read stdin: {e}");
+        return ExitCode::from(2);
+    }
+    let out = match zhfmt::format(&buf) {
+        Some(out) => out,
+        None => buf,
+    };
+    let mut stdout = std::io::stdout().lock();
+    if let Err(e) = stdout.write_all(&out).and_then(|()| stdout.flush()) {
+        eprintln!("error: failed to write stdout: {e}");
+        return ExitCode::from(2);
+    }
+    ExitCode::SUCCESS
+}

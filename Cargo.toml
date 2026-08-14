@@ -3,16 +3,56 @@ name         = "zhfmt"
 version      = "0.1.0"
 edition      = "2024"
 rust-version = "1.85"
-description  = "xxx"
+description  = "High performance batch formatter that adds spaces between CJK and Latin characters"
 readme       = "README.md"
-homepage     = "https://github.com/lxl66566/xxx"
-repository   = "https://github.com/lxl66566/xxx"
+homepage     = "https://github.com/lxl66566/zhfmt"
+repository   = "https://github.com/lxl66566/zhfmt"
 license      = "MIT OR Apache-2.0"
-keywords     = ["xxx"]
-categories   = ["xxx"]
+keywords     = ["chinese", "cjk", "formatter", "pangu", "whitespace"]
+categories   = ["command-line-utilities", "text-processing"]
 include      = ["/CHANGELOG.md", "/LICENSE-*", "/README.md", "/benches/**", "/src/**", "/tests/**"]
 
+[lib]
+name = "zhfmt"
+path = "src/lib.rs"
+
+[[bin]]
+name              = "zhfmt"
+path              = "src/main.rs"
+required-features = ["bin"]
+
+[[bench]]
+harness = false
+name    = "single_thread"
+
+[[bench]]
+harness           = false
+name              = "multi_files"
+required-features = ["bin"]
+
 [dependencies]
+memchr = "2.8"
+
+# bin-only dependencies
+clap       = { version = "4.6", features = ["derive"], optional = true }
+dirs       = { version = "6", optional = true }
+globset    = { version = "0.4", optional = true }
+ignore     = { version = "0.4", optional = true }
+memmap2    = { version = "0.9", optional = true }
+serde      = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+similar    = { version = "2", optional = true }
+snafu      = { version = "0.9", optional = true }
+tempfile   = { version = "3.27", optional = true }
+
+[dev-dependencies]
+criterion = "0.8"
+tempfile  = "3.27"
+
+[features]
+default = ["bin"]
+# compile binary, allows to format folders
+bin     = ["clap", "dirs", "globset", "ignore", "memmap2", "serde", "serde_json", "similar", "snafu", "tempfile"]
 
 [lints.clippy]
 all                     = { level = "warn", priority = -1 }
@@ -28,9 +68,9 @@ wildcard_imports        = "allow"
 unsafe_code           = "allow"
 unused_qualifications = "warn"
 
-# If you are building bin target, uncomment this
-# [profile.release]
-# lto       = true
-# opt-level = "s"
-# panic     = "abort"
-# strip     = true
+[profile.release]
+opt-level     = 3
+strip         = true
+lto           = true
+panic         = "abort"
+codegen-units = 1
