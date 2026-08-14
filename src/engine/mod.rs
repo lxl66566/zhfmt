@@ -35,9 +35,9 @@
 //!   boundaries on both sides. HTML comments (`<!-- ... -->`) keep the opaque boundary behavior but
 //!   their body is prose and gets formatted recursively.
 //! - Emphasis runs (`*...*`, `**...**`, `~~...~~`) act as wrappers when a matching closing run
-//!   exists: the outer boundary is decided by the interior's content and spaces are only ever
-//!   placed *outside* the markers, so `CG**鉴赏**` becomes `CG **鉴赏**`, never `CG** 鉴赏**`.
-//!   Unpaired runs stay transparent ([`Class::Soft`]).
+//!   exists within a bounded window (see [`MAX_EMPHASIS_SPAN`]): the outer boundary is decided by
+//!   the interior's content and spaces are only ever placed *outside* the markers, so `CG**鉴赏**`
+//!   becomes `CG **鉴赏**`, never `CG** 鉴赏**`. Unpaired runs stay transparent ([`Class::Soft`]).
 //!
 //! Module layout: [`scan`] locates the next interesting byte, [`boundary`]
 //! decides effective classes and construct extents, and this module holds the
@@ -54,8 +54,8 @@ use crate::classify::{Class, classify_at};
 mod scan;
 
 use boundary::{
-    crosses, find_closing_run, find_comment_end, find_url_end, is_space_byte, last_content_class,
-    lookback_class, next_is_latin, peek_forward_class, scan_html_tag,
+    MAX_EMPHASIS_SPAN, crosses, find_closing_run, find_comment_end, find_url_end, is_space_byte,
+    last_content_class, lookback_class, next_is_latin, peek_forward_class, scan_html_tag,
 };
 use scan::{Scan, find_ascii, find_wake};
 
@@ -302,7 +302,12 @@ impl<'a> Formatter<'a> {
         // An opening run must be immediately followed by a non-whitespace
         // char (crude CommonMark left-flanking; rejects list bullets `* `).
         if pairable && after < len && !is_space_byte(self.input[after]) {
-            if let Some(close) = find_closing_run(self.input, after, c, n) {
+            // The closer search is bounded (see MAX_EMPHASIS_SPAN): without
+            // the window, inputs like `*a *a *a ...` would rescan the whole
+            // input per opening run. Delimiters farther apart than the
+            // window stay unpaired.
+            let until = (after + MAX_EMPHASIS_SPAN).min(len);
+            if let Some(close) = find_closing_run(self.input, after, until, c, n) {
                 let interior = &self.input[after..close];
                 let first = peek_forward_class(interior, 0);
                 // `self.pos > self.last`: a CJK char's forward peek may have

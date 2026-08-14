@@ -394,3 +394,26 @@ fn emphasis_pairing() {
     // through as before.
     changed!("前缀*em**后缀", "前缀 *em** 后缀");
 }
+
+#[test]
+fn emphasis_pairing_window() {
+    // Pairs inside the window behave normally.
+    let inner = "中".repeat(100); // 300 bytes < MAX_EMPHASIS_SPAN
+    changed!(
+        &format!("a**{inner}**b"),
+        format!("a **{inner}** b").as_str()
+    );
+    // Interior beyond the window: delimiters stay unpaired (transparent),
+    // so the boundaries move inside the markers.
+    let far = "中".repeat(2000); // 6000 bytes > MAX_EMPHASIS_SPAN
+    changed!(&format!("a**{far}**b"), format!("a** {far} **b").as_str());
+}
+
+#[test]
+fn pathological_emphasis_input_stays_fast() {
+    // Regression guard for the pairing window: without it, every `*` run
+    // rescans the rest of the input (O(n^2)). Sized to stay quick in debug
+    // builds while still being painful without the window.
+    let input = "*a ".repeat(10_000);
+    unchanged!(&input);
+}

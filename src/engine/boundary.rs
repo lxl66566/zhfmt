@@ -122,17 +122,26 @@ pub(super) const fn is_space_byte(b: u8) -> bool {
     b < 0x80 && matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
 }
 
+/// Maximum distance between emphasis delimiters for them to pair: the
+/// closing-run search stops at this window, keeping the scan linear on
+/// pathological inputs (`*a *a *a ...` would otherwise rescan the whole
+/// input per opening run, O(n²)). Real emphasis spans are far shorter;
+/// pairs farther apart are treated as unpaired (transparent markers).
+pub(super) const MAX_EMPHASIS_SPAN: usize = 4096;
+
 /// Find a closing emphasis run of delimiter `c` with exactly length `n`,
-/// searching from `from`. A closing run must be immediately preceded by a
-/// non-whitespace byte (crude CommonMark right-flanking).
-///
-/// Known limit: pathological inputs where every candidate closer is
-/// rejected (e.g. `*a *a *a ...`) make each opening run rescan to the end
-/// of the input, degrading to O(n²). Accepted for the document sizes
-/// zhfmt targets.
-pub(super) fn find_closing_run(input: &[u8], from: usize, c: u8, n: usize) -> Option<usize> {
+/// searching from `from` up to `until` (exclusive bound for the closer's
+/// start). A closing run must be immediately preceded by a non-whitespace
+/// byte (crude CommonMark right-flanking).
+pub(super) fn find_closing_run(
+    input: &[u8],
+    from: usize,
+    until: usize,
+    c: u8,
+    n: usize,
+) -> Option<usize> {
     let mut scan = from;
-    while let Some(off) = memchr(c, &input[scan..]) {
+    while let Some(off) = memchr(c, input.get(scan..until).unwrap_or(&[])) {
         let start = scan + off;
         let mut m = 0;
         while start + m < input.len() && input[start + m] == c {
