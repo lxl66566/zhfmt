@@ -1,12 +1,17 @@
-//! The core spacing engine.
+//! The core spacing engine: a single-pass scanner over raw bytes.
 //!
 //! Design notes (performance):
 //!
 //! - Insertions can only ever happen at a boundary where one side is a CJK (non-ASCII) character,
 //!   or at a structural delimiter (`` ` ``, `[`, `]`) whose inner content decides the boundary.
 //!   Everything else is copied verbatim. The scanner therefore skips over "boring" bytes with a
-//!   SWAR loop (8 bytes per step, no per-byte branching) and only wakes on bytes `>= 0x80` and the
-//!   three structural delimiters.
+//!   hybrid scan (inline SWAR first word + SIMD continuation: AVX2 / SSE2 on x86_64, selected at
+//!   runtime; SWAR elsewhere) and only wakes on bytes `>= 0x80` and the three structural
+//!   delimiters. See [`scan`] for the scanning layer.
+//! - Consecutive multibyte characters are processed as one *run*: `Latin` is always ASCII, so no
+//!   boundary can exist between two multibyte chars. Only the first and last char of a run are
+//!   classified; the interior is skipped with a "first ASCII byte" scan. Malformed runs fall back
+//!   to per-char processing to keep the conservative `Class::Other` semantics for bad bytes.
 //! - Output is copy-on-write: the input is scanned once, and only when the first insertion point is
 //!   found do we allocate an output buffer and start copying. Files that are already correctly
 //!   spaced cost one linear scan and zero allocations, and are never rewritten.
@@ -18,7 +23,8 @@
 //! ([`Class::Neutral`]), other symbols ([`Class::Other`]) and whitespace never
 //! create boundaries. Quotes, parens and stray angle brackets are opaque
 //! ([`Class::Other`]): they block the boundary instead of being looked
-//! through, so markup is never split from the text it wraps.
+//! through, so markup is never split from the text it wraps. The effective
+//! classes around a seam are determined by the pure queries in [`boundary`].
 //!
 //! Structural constructs recognized by the scanner:
 //!
@@ -31,145 +37,26 @@
 //!   exists: the outer boundary is decided by the interior's content and spaces are only ever
 //!   placed *outside* the markers, so `CG**鉴赏**` becomes `CG **鉴赏**`, never `CG** 鉴赏**`.
 //!   Unpaired runs stay transparent ([`Class::Soft`]).
+//!
+//! Module layout: [`scan`] locates the next interesting byte, [`boundary`]
+//! decides effective classes and construct extents, and this module holds the
+//! [`Formatter`] state machine that ties them together.
 // Hot-path helpers are intentionally force-inlined.
 #![allow(clippy::inline_always)]
 
+mod boundary;
+
 use memchr::memchr;
 
-use crate::classify::{Class, ascii_class, char_start_before, classify_at, is_wake_byte};
+use crate::classify::{Class, classify_at};
 
-const SWAR_LO: u64 = 0x0101_0101_0101_0101;
-const SWAR_HI: u64 = 0x8080_8080_8080_8080;
+mod scan;
 
-/// Whether the SWAR word contains a zero byte.
-#[inline(always)]
-const fn has_zero(x: u64) -> bool {
-    x.wrapping_sub(SWAR_LO) & !x & SWAR_HI != 0
-}
-
-/// Whether the SWAR word contains byte `b` (`b < 0x80`).
-#[inline(always)]
-const fn has_byte(x: u64, b: u8) -> bool {
-    has_zero(x ^ (SWAR_LO * b as u64))
-}
-
-/// Whether the SWAR word contains a wake byte (see [`is_wake_byte`]).
-#[inline(always)]
-fn wake_in_word(w: u64) -> bool {
-    (w & SWAR_HI != 0)
-        || has_byte(w, b'`')
-        || has_byte(w, b'[')
-        || has_byte(w, b']')
-        || has_byte(w, b'<')
-        || has_byte(w, b'*')
-        || has_byte(w, b'~')
-}
-
-/// Find the next wake byte at or after `from`; returns `input.len()` if none.
-#[inline]
-fn find_wake(input: &[u8], from: usize) -> usize {
-    let len = input.len();
-    let mut i = from;
-    while i + 8 <= len {
-        // SAFETY: bounds checked by the loop condition.
-        let w = u64::from_le_bytes(unsafe { input.get_unchecked(i..i + 8) }.try_into().unwrap());
-        if wake_in_word(w) {
-            let mut k = i;
-            while !is_wake_byte(unsafe { *input.get_unchecked(k) }) {
-                k += 1;
-            }
-            return k;
-        }
-        i += 8;
-    }
-    while i < len {
-        if is_wake_byte(input[i]) {
-            return i;
-        }
-        i += 1;
-    }
-    len
-}
-
-/// Whether a space must be inserted between these two classes.
-#[inline(always)]
-const fn crosses(left: Option<Class>, right: Option<Class>) -> bool {
-    matches!(
-        (left, right),
-        (Some(Class::Latin), Some(Class::Cjk)) | (Some(Class::Cjk), Some(Class::Latin))
-    )
-}
-
-/// Class of the first *content* char at or after `from`, looking through
-/// [`Class::Soft`] delimiters. Returns `None` on whitespace, a hard delimiter
-/// or end of input (the boundary is then owned by someone else / nobody).
-fn peek_forward_class(input: &[u8], from: usize) -> Option<Class> {
-    let mut i = from;
-    while i < input.len() {
-        let (class, len) = classify_at(input, i);
-        match class {
-            Class::Soft => i += len,
-            Class::Space | Class::Hard => return None,
-            c => return Some(c),
-        }
-    }
-    None
-}
-
-/// Class of the last content char before `pos`, used after copying a pure
-/// ASCII run. `Soft` chars are skipped; a `Hard` char or the region start
-/// means the boundary was already decided by a previous event, so the current
-/// `prev` is kept.
-fn lookback_class(
-    input: &[u8],
-    region_start: usize,
-    pos: usize,
-    prev: Option<Class>,
-) -> Option<Class> {
-    let mut j = pos;
-    while j > region_start {
-        let b = input[j - 1];
-        if b < 0x80 {
-            match ascii_class(b) {
-                Class::Soft => j -= 1,
-                Class::Space => return None,
-                Class::Hard => return prev,
-                c => return Some(c),
-            }
-        } else {
-            let s = char_start_before(input, j);
-            match classify_at(input, s).0 {
-                Class::Soft => j = s,
-                c => return Some(c),
-            }
-        }
-    }
-    prev
-}
-
-/// Class of the last content char in `text` (skipping `Soft` and whitespace),
-/// searching backwards from the end. Used for code spans and link texts.
-fn last_content_class(text: &[u8]) -> Option<Class> {
-    let mut j = text.len();
-    let prev = None;
-    while j > 0 {
-        let b = text[j - 1];
-        if b < 0x80 {
-            match ascii_class(b) {
-                Class::Soft | Class::Space => j -= 1,
-                Class::Hard => return prev,
-                c => return Some(c),
-            }
-        } else {
-            let s = char_start_before(text, j);
-            match classify_at(text, s).0 {
-                Class::Soft => j = s,
-                c => return Some(c),
-            }
-        }
-    }
-    prev
-}
+use boundary::{
+    crosses, find_closing_run, find_url_end, is_space_byte, last_content_class, lookback_class,
+    next_is_latin, peek_forward_class, scan_html_tag,
+};
+use scan::{Scan, find_ascii, find_wake};
 
 /// Format `input`, returning `None` when no change is needed.
 #[must_use]
@@ -189,6 +76,8 @@ struct Formatter<'a> {
     prev: Option<Class>,
     /// Position of the most recent `[` (candidate link-text start).
     last_bracket_open: Option<usize>,
+    /// SIMD/SWAR scanners selected for this CPU.
+    scan: Scan,
 }
 
 impl<'a> Formatter<'a> {
@@ -200,13 +89,14 @@ impl<'a> Formatter<'a> {
             last: 0,
             prev: None,
             last_bracket_open: None,
+            scan: Scan::select(),
         }
     }
 
     fn run(mut self) -> Option<Vec<u8>> {
         let len = self.input.len();
         while self.pos < len {
-            let wake = find_wake(self.input, self.pos);
+            let wake = find_wake(self.input, self.pos, self.scan.wake());
             if wake > self.pos {
                 self.prev = lookback_class(self.input, self.pos, wake, self.prev);
                 self.pos = wake;
@@ -240,7 +130,47 @@ impl<'a> Formatter<'a> {
     }
 
     /// A multibyte character (CJK, fullwidth punctuation, emoji, ...).
+    ///
+    /// Consecutive multibyte characters are handled as one run: `Latin` is
+    /// always ASCII, so no boundary can exist *inside* a run — only the first
+    /// char (left boundary, `prev`) and the last char (right boundary,
+    /// look-ahead) can participate in a crossing. The run interior is skipped
+    /// with a bulk "first ASCII byte" scan instead of per-char decoding.
     fn on_multibyte(&mut self) {
+        let start = self.pos;
+        let end = find_ascii(self.input, start, self.scan.ascii());
+        // Start of the last char in the run, bounded to the run itself.
+        let mut last_start = end - 1;
+        while last_start > start && self.input[last_start] & 0xc0 == 0x80 {
+            last_start -= 1;
+        }
+        let (last_class, last_len) = classify_at(self.input, last_start);
+        if last_start + last_len != end {
+            // Malformed layout (e.g. a stray continuation byte at the run
+            // tail): fall back to per-char processing so bad bytes keep their
+            // conservative `Class::Other` semantics.
+            while self.pos < end {
+                self.on_multibyte_char();
+            }
+            return;
+        }
+        // The left boundary can only cross when the previous content char is
+        // Latin, so the first char needs no decoding otherwise.
+        if matches!(self.prev, Some(Class::Latin)) {
+            let (first_class, _) = classify_at(self.input, start);
+            if first_class == Class::Cjk {
+                self.insert_space(start);
+            }
+        }
+        if last_class == Class::Cjk && next_is_latin(self.input, end) {
+            self.insert_space(end);
+        }
+        self.prev = Some(last_class);
+        self.pos = end;
+    }
+
+    /// The original per-char handler, used as the fallback for malformed runs.
+    fn on_multibyte_char(&mut self) {
         let (class, len) = classify_at(self.input, self.pos);
         if class == Class::Cjk {
             if crosses(self.prev, Some(Class::Cjk)) {
@@ -399,108 +329,6 @@ impl<'a> Formatter<'a> {
 /// A fresh output buffer, pre-sized for the whole input plus insertions.
 fn fresh_out(input_len: usize) -> Vec<u8> {
     Vec::with_capacity(input_len + input_len / 8 + 16)
-}
-
-/// Whether this byte is ASCII whitespace. Multibyte chars (>= 0x80) are not.
-#[inline(always)]
-const fn is_space_byte(b: u8) -> bool {
-    b < 0x80 && matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
-}
-
-/// Find a closing emphasis run of delimiter `c` with exactly length `n`,
-/// searching from `from`. A closing run must be immediately preceded by a
-/// non-whitespace byte (crude CommonMark right-flanking).
-fn find_closing_run(input: &[u8], from: usize, c: u8, n: usize) -> Option<usize> {
-    let mut scan = from;
-    while let Some(off) = memchr(c, &input[scan..]) {
-        let start = scan + off;
-        let mut m = 0;
-        while start + m < input.len() && input[start + m] == c {
-            m += 1;
-        }
-        if m == n && start > 0 && !is_space_byte(input[start - 1]) {
-            return Some(start);
-        }
-        scan = start + m;
-    }
-    None
-}
-
-/// Scan an HTML tag / comment / processing instruction starting at `<`
-/// (position `pos`). Returns the position just past the closing `>`, or
-/// `None` if `<` does not open a valid tag. Quoted attribute values are
-/// skipped, so `>` inside `title="..."` never ends the tag early and
-/// attribute interiors are never inspected.
-fn scan_html_tag(input: &[u8], pos: usize) -> Option<usize> {
-    let mut i = pos + 1;
-    match *input.get(i)? {
-        b'!' => {
-            // Comment `<!-- ... -->`; anything else (`<!DOCTYPE ...>`,
-            // `<![CDATA[...]]>`) runs to the next `>`.
-            if input[i..].starts_with(b"<!--") {
-                i += 4;
-                loop {
-                    let gt = memchr(b'>', &input[i..]).map(|o| i + o)?;
-                    if &input[gt - 2..gt] == b"--" {
-                        return Some(gt + 1);
-                    }
-                    i = gt + 1;
-                }
-            }
-            memchr(b'>', &input[i..]).map(|o| i + o + 1)
-        },
-        // Processing instruction `<? ... >`.
-        b'?' => memchr(b'>', &input[i..]).map(|o| i + o + 1),
-        _ => {
-            if input[i] == b'/' {
-                i += 1;
-            }
-            // A tag name must start with an ASCII letter.
-            if input.get(i)?.is_ascii_alphabetic() {
-                scan_tag_body(input, i)
-            } else {
-                None
-            }
-        },
-    }
-}
-
-/// Scan from inside a tag (at its name) to just past the closing `>`,
-/// skipping over quoted attribute values.
-fn scan_tag_body(input: &[u8], mut i: usize) -> Option<usize> {
-    loop {
-        match *input.get(i)? {
-            b'>' => return Some(i + 1),
-            q @ (b'"' | b'\'') => {
-                let close = memchr(q, &input[i + 1..])?;
-                i += close + 2;
-            },
-            _ => i += 1,
-        }
-    }
-}
-
-/// Find the `)` closing a link URL starting at `from` (just after `(`).
-/// Tracks one level of nested parens (Wikipedia-style URLs). Bails out on
-/// whitespace or end of input (malformed / not really a URL).
-fn find_url_end(input: &[u8], from: usize) -> Option<usize> {
-    let mut depth = 1usize;
-    let mut i = from;
-    while i < input.len() {
-        match input[i] {
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            },
-            b' ' | b'\t' | b'\n' | b'\r' => return None,
-            _ => {},
-        }
-        i += 1;
-    }
-    None
 }
 
 #[cfg(test)]

@@ -205,6 +205,44 @@ fn malformed_utf8_passthrough() {
 }
 
 #[test]
+fn malformed_run_tails() {
+    // A stray continuation byte at a multibyte run tail must keep the
+    // conservative per-char semantics (no space stuffed across it).
+    let mut v = "中".as_bytes().to_vec();
+    v.push(0x80);
+    v.extend_from_slice(b"a");
+    assert!(format(&v).is_none(), "input: {v:?}");
+    // Run of pure continuation bytes.
+    assert!(format(&[0x80, 0x80, b'a']).is_none());
+    // Truncated lead byte at end of input.
+    assert!(format(&[0xe4, 0xb8]).is_none());
+    // A standalone malformed byte inside a run: the run layout stays valid,
+    // so the surrounding CJK/Latin boundaries still apply.
+    let mut w = b"a".to_vec();
+    w.extend_from_slice("中".as_bytes());
+    w.push(0xff);
+    w.extend_from_slice("文".as_bytes());
+    w.extend_from_slice(b"b");
+    let expected: &[u8] = b"a \xe4\xb8\xad\xff\xe6\x96\x87 b";
+    assert_eq!(format(&w), Some(expected.to_vec()));
+}
+
+#[test]
+fn long_multibyte_runs() {
+    // Runs longer than one SWAR word exercise the SIMD continuation.
+    let long = "中".repeat(64);
+    assert_eq!(fmt(&format!("{long}a")), format!("{long} a"));
+    assert_eq!(fmt(&format!("a{long}")), format!("a {long}"));
+    // Fullwidth punctuation inside long runs stays neutral; the final CJK
+    // char still bounds against the trailing Latin char.
+    let mixed = "中，文，字".repeat(20);
+    assert_eq!(fmt(&format!("{mixed}x")), format!("{mixed} x"));
+    // 4-byte codepoints (emoji) in runs never create boundaries.
+    let emoji = "🎉".repeat(16);
+    assert_eq!(fmt(&format!("a{emoji}b")), format!("a{emoji}b"));
+}
+
+#[test]
 fn crlf_and_mixed_lines() {
     changed!("第一行line1\r\n第二行line2", "第一行 line1\r\n第二行 line2");
 }

@@ -7,8 +7,8 @@
 //!   directory and atomically renamed over the original.
 
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
+    fs,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::{
         Mutex,
@@ -248,19 +248,21 @@ fn finish(
 
 /// Process a single file. Returns whether the content needs changes.
 pub fn process_file(path: &Path, opts: &RunOptions) -> Result<bool, ProcessError> {
-    let meta = fs::metadata(path).context(ReadSnafu { path })?;
+    // Open once and stat the handle: avoids a second path resolution per file.
+    let mut file = fs::File::open(path).context(ReadSnafu { path })?;
+    let meta = file.metadata().context(ReadSnafu { path })?;
     if meta.len() == 0 {
         return Ok(false);
     }
     if meta.len() < SMALL_FILE_THRESHOLD {
-        let buf = fs::read(path).context(ReadSnafu { path })?;
+        let mut buf = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(usize::MAX));
+        file.read_to_end(&mut buf).context(ReadSnafu { path })?;
+        // Close the handle before finish(): on Windows, writing back via
+        // rename would fail while our own handle is still open.
+        drop(file);
         let formatted = crate::format(&buf);
         finish(path, opts, &buf, formatted, &meta)
     } else {
-        let file = OpenOptions::new()
-            .read(true)
-            .open(path)
-            .context(ReadSnafu { path })?;
         // SAFETY: the file is opened read-only and not modified by us while
         // mapped; see memmap2 docs for the external-modification caveats.
         let mmap = unsafe { MmapOptions::new().map(&file).context(ReadSnafu { path })? };
