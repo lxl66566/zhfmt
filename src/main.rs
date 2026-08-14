@@ -46,6 +46,23 @@ struct Cli {
     jobs: Option<usize>,
 }
 
+/// Load the config from `--config`, or discover it; `None` if not found.
+fn resolve_config(cli: &Cli) -> Result<Config, String> {
+    if let Some(path) = &cli.config {
+        return config::load_file(path).map_err(|e| e.to_string());
+    }
+    // Discover from the real working directory: `Path::new(".").ancestors()`
+    // only yields `[".", ""]`, which would never leave the cwd.
+    let discovered = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| config::discover(&cwd));
+    match discovered.map(|p| config::load_file(&p)) {
+        Some(Ok(c)) => Ok(c),
+        Some(Err(e)) => Err(e.to_string()),
+        None => Ok(Config::default()),
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -58,28 +75,11 @@ fn main() -> ExitCode {
         return run_stdin();
     }
 
-    let mut config = match &cli.config {
-        Some(path) => match config::load_file(path) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::from(2);
-            },
-        },
-        None => {
-            // Discover from the real working directory: `Path::new(".").ancestors()`
-            // only yields `[".", ""]`, which would never leave the cwd.
-            let discovered = std::env::current_dir()
-                .ok()
-                .and_then(|cwd| config::discover(&cwd));
-            match discovered.map(|p| config::load_file(&p)) {
-                Some(Ok(c)) => c,
-                Some(Err(e)) => {
-                    eprintln!("error: {e}");
-                    return ExitCode::from(2);
-                },
-                None => Config::default(),
-            }
+    let mut config = match resolve_config(&cli) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
         },
     };
     if let Some(ext) = cli.ext {
