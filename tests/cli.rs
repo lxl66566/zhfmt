@@ -140,6 +140,40 @@ fn config_file_exclude() {
 }
 
 #[test]
+fn exclude_and_include_match_relative_to_walk_root() {
+    let tmp = TempDir::new().unwrap();
+    write_file(
+        tmp.path(),
+        "zhfmt.json",
+        r#"{ "exclude": ["skip/**"], "include": ["extra/*.note"] }"#,
+    );
+    fs::create_dir(tmp.path().join("skip")).unwrap();
+    fs::create_dir(tmp.path().join("extra")).unwrap();
+    let skipped = write_file(&tmp.path().join("skip"), "a.md", "中文test");
+    let kept = write_file(tmp.path(), "keep.md", "中文test");
+    let noted = write_file(&tmp.path().join("extra"), "x.note", "中文test");
+
+    // Absolute walk root while the cwd is a child dir (so the config in
+    // tmp is found by walking up, and the relative globs must resolve
+    // against the walk root, not the cwd).
+    let child = tmp.path().join("child");
+    fs::create_dir(&child).unwrap();
+    let out = zhfmt()
+        .current_dir(&child)
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(fs::read_to_string(&skipped).unwrap(), "中文test");
+    assert_eq!(fs::read_to_string(&kept).unwrap(), "中文 test");
+    assert_eq!(fs::read_to_string(&noted).unwrap(), "中文 test");
+}
+
+#[test]
 fn nonexistent_path_reports_error() {
     let tmp = TempDir::new().unwrap();
     let out = zhfmt()

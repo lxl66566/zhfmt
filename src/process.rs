@@ -16,7 +16,7 @@ use std::{
     },
 };
 
-use ignore::{WalkState, overrides::OverrideBuilder};
+use ignore::WalkState;
 use memmap2::MmapOptions;
 use snafu::{ResultExt, Snafu};
 
@@ -48,7 +48,7 @@ pub enum ProcessError {
     },
     #[snafu(display("invalid exclude glob {pattern:?}"))]
     ExcludeGlob {
-        source: ignore::Error,
+        source: globset::Error,
         pattern: String,
     },
     #[snafu(display("invalid include glob {pattern:?}"))]
@@ -133,34 +133,20 @@ pub fn process_paths(paths: &[PathBuf], opts: &RunOptions) -> Result<Summary, Pr
             builder.add(d);
         }
         builder.hidden(false).threads(opts.config.jobs);
-        if !opts.config.exclude.is_empty() {
-            let mut ob = OverrideBuilder::new(".");
-            for pattern in &opts.config.exclude {
-                ob.add(&format!("!{pattern}")).context(ExcludeGlobSnafu {
-                    pattern: pattern.clone(),
-                })?;
-            }
-            let o = ob.build().context(ExcludeGlobSnafu {
-                pattern: String::new(),
-            })?;
-            builder.overrides(o);
-        }
 
-        let include_set = {
-            let mut b = globset::GlobSetBuilder::new();
-            for pattern in &opts.config.include {
-                b.add(globset::Glob::new(pattern).context(IncludeGlobSnafu {
-                    pattern: pattern.clone(),
-                })?);
-            }
-            b.build().context(IncludeGlobSnafu {
-                pattern: String::new(),
-            })?
-        };
+        // Glob sets are built once; patterns are matched against the path
+        // relative to its walk root (see `matches_relative`), so they work
+        // with absolute roots as well.
+        let exclude_set = build_glob_set(&opts.config.exclude)
+            .map_err(|(pattern, source)| ProcessError::ExcludeGlob { pattern, source })?;
+        let include_set = build_glob_set(&opts.config.include)
+            .map_err(|(pattern, source)| ProcessError::IncludeGlob { pattern, source })?;
 
+        let roots: Vec<PathBuf> = dirs.iter().map(|p| (*p).clone()).collect();
         let has_explicit = !files.is_empty();
         let ext_filter = |path: &Path| {
-            has_target_extension(path, &opts.config.extensions) || include_set.is_match(path)
+            has_target_extension(path, &opts.config.extensions)
+                || matches_relative(&include_set, path, &roots)
         };
 
         builder.build_parallel().run(|| {
@@ -168,6 +154,8 @@ pub fn process_paths(paths: &[PathBuf], opts: &RunOptions) -> Result<Summary, Pr
             let explicit = &explicit;
             let ext_filter = &ext_filter;
             let errors = &errors;
+            let exclude_set = &exclude_set;
+            let roots = &roots;
             Box::new(move |entry| {
                 let entry = match entry {
                     Ok(entry) => entry,
@@ -179,10 +167,19 @@ pub fn process_paths(paths: &[PathBuf], opts: &RunOptions) -> Result<Summary, Pr
                         return WalkState::Continue;
                     },
                 };
+                let path = entry.path();
+                let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
+                // Excluded: files are skipped, directories are pruned.
+                if matches_relative(exclude_set, path, roots) {
+                    return if is_dir {
+                        WalkState::Skip
+                    } else {
+                        WalkState::Continue
+                    };
+                }
                 if !entry.file_type().is_some_and(|t| t.is_file()) {
                     return WalkState::Continue;
                 }
-                let path = entry.path();
                 if !ext_filter(path) {
                     return WalkState::Continue;
                 }
@@ -210,6 +207,26 @@ fn has_target_extension(path: &Path, extensions: &[String]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| extensions.iter().any(|t| t.eq_ignore_ascii_case(e)))
+}
+
+/// Build a glob set from config patterns; on failure returns the offending
+/// pattern together with the error.
+fn build_glob_set(patterns: &[String]) -> Result<globset::GlobSet, (String, globset::Error)> {
+    let mut builder = globset::GlobSetBuilder::new();
+    for pattern in patterns {
+        builder.add(globset::Glob::new(pattern).map_err(|e| (pattern.clone(), e))?);
+    }
+    builder.build().map_err(|e| (String::new(), e))
+}
+
+/// Whether `path` (as walked, possibly absolute) matches a glob set whose
+/// patterns are expressed relative to one of the walk `roots`. Falls back
+/// to matching the raw path, so relative roots keep working.
+fn matches_relative(set: &globset::GlobSet, path: &Path, roots: &[PathBuf]) -> bool {
+    roots
+        .iter()
+        .any(|r| path.strip_prefix(r).is_ok_and(|rel| set.is_match(rel)))
+        || set.is_match(path)
 }
 
 /// Format `contents` and act according to the mode. Returns whether the

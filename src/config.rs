@@ -42,9 +42,9 @@ pub struct ConfigFile {
     /// File extensions to process (without dot), replacing the defaults.
     pub extensions: Option<Vec<String>>,
     /// Additional glob patterns to include (even if the extension does not
-    /// match), relative to the current working directory.
+    /// match), relative to the walk root.
     pub include: Vec<String>,
-    /// Glob patterns to exclude, relative to the current working directory.
+    /// Glob patterns to exclude, relative to the walk root.
     pub exclude: Vec<String>,
     /// Number of walker threads; 0 or absent means auto.
     pub jobs: Option<usize>,
@@ -55,9 +55,9 @@ pub struct ConfigFile {
 pub struct Config {
     /// Extensions to process (without dot).
     pub extensions: Vec<String>,
-    /// Extra whitelist globs (matched against paths as walked).
+    /// Extra whitelist globs, matched against paths relative to the walk root.
     pub include: Vec<String>,
-    /// Blacklist globs (matched against paths relative to the walk root).
+    /// Blacklist globs, matched against paths relative to the walk root.
     pub exclude: Vec<String>,
     /// Walker threads; 0 means auto.
     pub jobs: usize,
