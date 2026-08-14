@@ -167,9 +167,17 @@ pub fn process_paths(paths: &[PathBuf], opts: &RunOptions) -> Result<Summary, Pr
             let run_one = &run_one;
             let explicit = &explicit;
             let ext_filter = &ext_filter;
+            let errors = &errors;
             Box::new(move |entry| {
-                let Ok(entry) = entry else {
-                    return WalkState::Continue
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    // A walk error (e.g. a non-existent root path) must not
+                    // be silently swallowed: CI typos would pass unnoticed.
+                    Err(e) => {
+                        errors.fetch_add(1, Ordering::Relaxed);
+                        eprintln!("error: {e}");
+                        return WalkState::Continue;
+                    },
                 };
                 if !entry.file_type().is_some_and(|t| t.is_file()) {
                     return WalkState::Continue;

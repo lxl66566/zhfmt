@@ -167,9 +167,8 @@ pub(super) fn find_comment_end(input: &[u8], pos: usize) -> Option<usize> {
 pub(super) fn scan_html_tag(input: &[u8], pos: usize) -> Option<usize> {
     let mut i = pos + 1;
     match *input.get(i)? {
+        // Declarations (<!DOCTYPE ...>) and processing instructions (<? ...>).
         b'!' | b'?' => memchr(b'>', &input[i..]).map(|o| i + o + 1),
-        // Processing instruction `<? ... >`.
-        b'?' => memchr(b'>', &input[i..]).map(|o| i + o + 1),
         _ => {
             if input[i] == b'/' {
                 i += 1;

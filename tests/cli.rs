@@ -140,6 +140,19 @@ fn config_file_exclude() {
 }
 
 #[test]
+fn nonexistent_path_reports_error() {
+    let tmp = TempDir::new().unwrap();
+    let out = zhfmt()
+        .arg(tmp.path().join("does-not-exist.md"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("error"), "stderr: {stderr}");
+    assert!(stderr.contains("1 errors"), "stderr: {stderr}");
+}
+
+#[test]
 fn config_discovered_from_parent_directory() {
     let tmp = TempDir::new().unwrap();
     // Config in the parent dir customizes extensions; run from a child dir.
