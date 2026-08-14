@@ -101,12 +101,15 @@ fn stdin_rejects_check_and_diff() {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all("中文test".as_bytes())
-            .unwrap();
+        // The child exits without reading stdin, so the write may race with
+        // the pipe closing (EPIPE on Unix). That's fine; ignore BrokenPipe.
+        let mut stdin = child.stdin.take().unwrap();
+        match stdin.write_all("中文test".as_bytes()) {
+            Ok(()) => {},
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {},
+            Err(e) => panic!("{e}"),
+        }
+        drop(stdin);
         let out = child.wait_with_output().unwrap();
         assert_eq!(out.status.code(), Some(2), "flag: {flag}");
         let stderr = String::from_utf8_lossy(&out.stderr);
