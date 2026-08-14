@@ -60,6 +60,15 @@ test("fenced code block content is never spaced", async () => {
   );
 });
 
+test("html comments are formatted inside but opaque outside", async () => {
+  assert.equal(
+    await fmt("中文<!-- 注释comment -->中文", { parser: "zhfmt" }),
+    "中文<!-- 注释 comment -->中文",
+  );
+  // A '>' inside the comment body does not close it.
+  assert.equal(format("<!-- 注释x>注释y中文z -->"), "<!-- 注释 x>注释 y 中文 z -->");
+});
+
 test("markdown keeps core formatting and gains CJK spacing", async () => {
   const out = await fmt("*  中文abc\n  二级item\n", { filepath: "readme.md" });
   assert.equal(out, "- 中文 abc\n  二级 item\n");
