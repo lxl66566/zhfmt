@@ -1,0 +1,36 @@
+[package]
+name         = "zhfmt"
+version      = "0.1.0"
+edition      = "2024"
+rust-version = "1.85"
+description  = "xxx"
+readme       = "README.md"
+homepage     = "https://github.com/lxl66566/xxx"
+repository   = "https://github.com/lxl66566/xxx"
+license      = "MIT OR Apache-2.0"
+keywords     = ["xxx"]
+categories   = ["xxx"]
+include      = ["/CHANGELOG.md", "/LICENSE-*", "/README.md", "/benches/**", "/src/**", "/tests/**"]
+
+[dependencies]
+
+[lints.clippy]
+all                     = { level = "warn", priority = -1 }
+cargo                   = { level = "warn", priority = -1 }
+doc_markdown            = "allow"
+missing_errors_doc      = "allow"
+missing_panics_doc      = "allow"
+multiple_crate_versions = "allow"
+pedantic                = { level = "warn", priority = -1 }
+wildcard_imports        = "allow"
+
+[lints.rust]
+unsafe_code           = "allow"
+unused_qualifications = "warn"
+
+# If you are building bin target, uncomment this
+# [profile.release]
+# lto       = true
+# opt-level = "s"
+# panic     = "abort"
+# strip     = true
