@@ -56,6 +56,21 @@ fn diff_mode_prints_unified_diff() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("-中文test"), "stdout: {stdout}");
     assert!(stdout.contains("+中文 test"), "stdout: {stdout}");
+    // Exactly one header pair, carrying the file path.
+    assert_eq!(
+        stdout.lines().filter(|l| l.starts_with("---")).count(),
+        1,
+        "stdout: {stdout}"
+    );
+    assert_eq!(
+        stdout.lines().filter(|l| l.starts_with("+++")).count(),
+        1,
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("--- {}", md.display())),
+        "stdout: {stdout}"
+    );
     assert_eq!(fs::read_to_string(&md).unwrap(), "中文test\n");
 }
 

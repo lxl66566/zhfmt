@@ -250,12 +250,10 @@ fn finish(
             let new = String::from_utf8_lossy(&formatted);
             let diff = similar::TextDiff::from_lines(old.as_ref(), new.as_ref());
             let _guard = opts.print_lock.lock().unwrap();
-            println!("--- {}\n+++ {}", path.display(), path.display());
+            let path = path.display().to_string();
             print!(
                 "{}",
-                diff.unified_diff()
-                    .context_radius(3)
-                    .header("original", "formatted")
+                diff.unified_diff().context_radius(3).header(&path, &path)
             );
             Ok(true)
         },
