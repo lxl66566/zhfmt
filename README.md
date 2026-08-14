@@ -1,5 +1,7 @@
 # zhfmt
 
+简体中文 | [English](./README.en.md)
+
 高性能中文文档批量格式化工具：遵循中文写作原则（盘古之白），在中文与英文/数字之间自动添加空格。
 
 - 安全：只插入单个空格，从不删除任何内容；原子化替换文件。
@@ -53,6 +55,8 @@ pnpm add -D prettier-plugin-zhfmt
 
 详见[插件文档](./prettier-plugin-zhfmt/README.md)。
 
+prettier-plugin-zhfmt 不带有 SIMD 实现，如果有条件使用二进制则不推荐使用 prettier-plugin-zhfmt。
+
 ## 配置文件
 
 查找顺序：从当前目录逐级向上查找 `zhfmt.json` 或 `.zhfmt.json`，取最近；都没有则尝试全局配置（`$XDG_CONFIG_HOME/zhfmt/zhfmt.json`，Windows 下为 `%APPDATA%` 对应目录）；再没有则使用默认配置。
@@ -73,7 +77,7 @@ pnpm add -D prettier-plugin-zhfmt
 
 ## 算法简述
 
-核心在 [src/engine/mod.rs](src/engine/mod.rs)，字符分类在 [src/classify.rs](src/classify.rs)，完整设计见 [docs/design.md](docs/design.md)。
+核心在 [src/engine](src/engine)，字符分类在 [src/classify.rs](src/classify.rs)，完整设计见 [docs/design.md](docs/design.md)。
 
 1. 字符分类：每个字符被归为 `Latin`（a-zA-Z0-9）、`CJK`（汉字/假名/韩文/全角字母数字）、`Neutral`（全角标点）、`Soft`（透明界定符：仅未配对的 `*`、`~`）、`Hard`（结构界定符：`` ` ``、`[`、`]`）、`Space`、`Other`（含引号、括号、裸 `<`/`>` 等，阻断边界）
 2. 混合扫描：边界只可能出现在非 ASCII 字节或结构字节处；短区段用内联 SWAR（u64 字内并行）定位这些"唤醒字节"，长干净区段交给 AVX2/SSE2（运行时检测）续扫
@@ -89,7 +93,7 @@ pnpm add -D prettier-plugin-zhfmt
 
 ## 性能
 
-criterion 基准（`cargo bench`）。本机结果：Linux x86_64 / AVX2，AMD Zen 5，
+criterion 基准（`cargo bench`）。本机结果：Linux x86_64 / AVX2，AMD 7945HX，
 32 线程，多轮代表值。
 
 | 场景                      | 输入大小        | 吞吐 / 耗时 |

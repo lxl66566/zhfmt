@@ -59,9 +59,7 @@ fn bench_sizes(c: &mut Criterion) {
         g.bench_with_input(
             BenchmarkId::from_parameter(format!("{kb}KB")),
             &input,
-            |b, input| {
-                b.iter(|| zhfmt::format(std::hint::black_box(input.as_bytes())));
-            },
+            |b, input| b.iter(|| zhfmt::format(std::hint::black_box(input.as_bytes()))),
         );
     }
     g.finish();
