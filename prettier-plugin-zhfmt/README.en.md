@@ -10,6 +10,8 @@ A [Prettier](https://prettier.io) plugin that automatically inserts spaces betwe
 pnpm add -D prettier-plugin-zhfmt
 ```
 
+Requires Prettier >= 3.6 (peer dependency). Earlier versions do not await the parser's `preprocess`, which would blank the output.
+
 ## Usage
 
 In your `.prettierrc`:

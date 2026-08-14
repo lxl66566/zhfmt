@@ -44,6 +44,9 @@ const languages = [
  * `options.originalText` from the text `preprocess` returns, keeping AST
  * positions (which printers slice against) in sync. Transforming in `parse`
  * instead would desync every node position and mangle the output.
+ *
+ * Async requires Prettier >= 3.6: earlier versions do not await `preprocess`
+ * and would treat the returned Promise as the source text, blanking output.
  */
 function wrap(parser) {
   return {

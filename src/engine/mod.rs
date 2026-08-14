@@ -129,6 +129,23 @@ impl<'a> Formatter<'a> {
         self.last = at;
     }
 
+    /// Right boundary of a content-wrapped construct (link text, code span,
+    /// emphasis) against a Latin neighbor. The construct handlers set `prev`
+    /// from the interior and jump past the closer, but a following ASCII
+    /// Latin char never wakes the scanner — without this check the crossing
+    /// would go unnoticed (`中[中文]b` would stay unspaced).
+    fn insert_right_boundary(&mut self) {
+        if matches!(self.prev, Some(Class::Cjk))
+            && self.pos > self.last
+            && self
+                .input
+                .get(self.pos)
+                .is_some_and(u8::is_ascii_alphanumeric)
+        {
+            self.insert_space(self.pos);
+        }
+    }
+
     /// A multibyte character (CJK, fullwidth punctuation, emoji, ...).
     ///
     /// Consecutive multibyte characters are handled as one run: `Latin` is
@@ -225,6 +242,7 @@ impl<'a> Formatter<'a> {
                 }
                 self.prev = last_content_class(interior);
                 self.pos = c + n;
+                self.insert_right_boundary();
             },
             None => {
                 // Unclosed: treat as transparent, keep `prev`.
@@ -277,6 +295,7 @@ impl<'a> Formatter<'a> {
                 }
                 self.prev = last_content_class(interior);
                 self.pos = close + n;
+                self.insert_right_boundary();
                 return;
             }
         }
@@ -300,6 +319,7 @@ impl<'a> Formatter<'a> {
         if crosses(self.prev, first) {
             self.insert_space(self.pos);
         }
+        self.prev = first;
         self.last_bracket_open = Some(self.pos);
         self.pos += 1;
     }
@@ -318,11 +338,13 @@ impl<'a> Formatter<'a> {
                     }
                 }
                 self.pos = end + 1;
+                self.insert_right_boundary();
                 return;
             }
         }
         // Not a link (or malformed): treat as transparent.
         self.pos += 1;
+        self.insert_right_boundary();
     }
 }
 

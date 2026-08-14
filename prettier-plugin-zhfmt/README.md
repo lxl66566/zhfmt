@@ -10,6 +10,8 @@
 pnpm add -D prettier-plugin-zhfmt
 ```
 
+要求 Prettier >= 3.6 (peer dependency)。更早的版本不会 await parser 的 `preprocess`，会导致输出为空。
+
 ## 使用
 
 `.prettierrc`：

@@ -105,6 +105,9 @@ fn links() {
         "这是一个 [link](https:Xxx) 格式"
     );
     unchanged!("这是一个[中文链接](https://example.com)格式");
+    // Latin before a CJK link text: space goes outside the bracket only,
+    // never between `[` and the text (would alter the rendered link text).
+    changed!("什么p[好呢](hq)还有", "什么 p [好呢](hq)还有");
     // Link text is prose and gets formatted inside.
     changed!("[中文code中文](url)", "[中文 code 中文](url)");
     // URL content never influences the outer boundary.
@@ -113,7 +116,12 @@ fn links() {
     // Reference-style / plain brackets.
     changed!("中文[note]english", "中文 [note]english");
     changed!("中文[note]中文", "中文 [note] 中文");
-    unchanged!("中文[中文]english");
+    // The right boundary is decided by the bracket content too, even though
+    // the Latin neighbor never wakes the scanner.
+    changed!("中文[中文]english", "中文[中文] english");
+    changed!("中[中文](url)b", "中[中文](url) b");
+    changed!("中**中文**b", "中**中文** b");
+    changed!("中`中文`b", "中`中文` b");
     // Malformed: space inside parens -> not a URL, treated as plain text;
     // the `)` is opaque and blocks the boundary.
     unchanged!("[a](b c)中文");

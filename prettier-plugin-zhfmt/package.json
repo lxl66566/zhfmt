@@ -33,7 +33,7 @@
   },
   "homepage": "https://github.com/lxl66566/zhfmt#readme",
   "peerDependencies": {
-    "prettier": "^3.0.0"
+    "prettier": "^3.6.0"
   },
   "devDependencies": {
     "prettier": "^3.6.2"
