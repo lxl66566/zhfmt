@@ -60,8 +60,8 @@ mod scan;
 
 use boundary::{
     MAX_EMPHASIS_SPAN, crosses, find_closing_run, find_code_span, find_comment_end, find_url_end,
-    is_space_byte, last_content_class, latin_after_punct, lookback_class, peek_forward_class,
-    prose_first_class, prose_last_class, run_len, scan_html_tag,
+    front_matter_end, is_space_byte, last_content_class, latin_after_punct, lookback_class,
+    peek_forward_class, prose_first_class, prose_last_class, run_len, scan_html_tag,
 };
 use scan::{Scan, find_ascii, find_wake};
 
@@ -125,6 +125,13 @@ impl<'a> Formatter<'a> {
 
     fn run(mut self) -> Option<Vec<u8>> {
         let len = self.input.len();
+        // YAML front matter is file-level metadata: skip it verbatim. (A
+        // recursive slice from splice_formatted starting with `---` would be
+        // skipped too — a harmless conservative miss.) `last` stays at 0 so
+        // the skipped prefix is still part of the first COW flush.
+        if let Some(end) = front_matter_end(self.input) {
+            self.pos = end;
+        }
         while self.pos < len {
             let wake = find_wake(self.input, self.pos, self.scan.wake());
             if wake > self.pos {

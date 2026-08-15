@@ -74,6 +74,30 @@ pub(super) fn latin_after_punct(input: &[u8], from: usize) -> Option<usize> {
     None
 }
 
+/// YAML front matter at the very start of a document: an opening `---`
+/// line, then lines until a closing `---` or `...` line. Static-site
+/// generators treat the block as metadata; its strings are hardcoded
+/// values, never prose, so the whole block is skipped verbatim. Returns the
+/// position just past the closing line's newline, or `None` when the
+/// document does not open with a complete front matter block.
+pub(super) fn front_matter_end(input: &[u8]) -> Option<usize> {
+    let rest = input.strip_prefix(b"---")?;
+    let mut i = match rest.first() {
+        Some(b'\n') => 4,
+        Some(b'\r') if rest.get(1) == Some(&b'\n') => 5,
+        _ => return None,
+    };
+    while let Some(off) = memchr(b'\n', &input[i..]) {
+        let nl = i + off;
+        let line = input[i..nl].strip_suffix(b"\r").unwrap_or(&input[i..nl]);
+        if line == b"---" || line == b"..." {
+            return Some(nl + 1);
+        }
+        i = nl + 1;
+    }
+    None
+}
+
 /// Class of the last content char before `pos`, used after copying a pure
 /// ASCII run. `Soft` chars are skipped; a `Hard` char or the region start
 /// means the boundary was already decided by a previous event, so the current

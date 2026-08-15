@@ -298,6 +298,28 @@ fn markdown_documents() {
     changed!("配置项`name中文`保持", "配置项 `name中文`保持");
 }
 
+#[test]
+fn front_matter_untouched() {
+    // YAML front matter is metadata: hardcoded strings stay untouched,
+    // the body is formatted.
+    changed!(
+        "---\ntitle: 中文test混排\n---\n正文content",
+        "---\ntitle: 中文test混排\n---\n正文 content"
+    );
+    // CRLF line endings.
+    changed!(
+        "---\r\ntitle: a中文b\r\n---\r\n正文x",
+        "---\r\ntitle: a中文b\r\n---\r\n正文 x"
+    );
+    // `...` also closes the block (YAML document end marker).
+    unchanged!("---\nkey: 中文x值\n...\n");
+    // No closing fence: not front matter (just a thematic break), the rest
+    // is prose.
+    changed!("---\n中文test", "---\n中文 test");
+    // Not at document start: not front matter.
+    changed!("\n---\n中文test", "\n---\n中文 test");
+}
+
 // The following test groups persist real-world regression cases: constructs
 // where adding a space would change rendering or break semantics.
 
