@@ -439,11 +439,9 @@ impl<'a> Formatter<'a> {
         hit.is_some()
     }
 
-    /// `[`: the following content decides the left boundary (link text or
-    /// plain bracket content). A footnote reference `[^id]` is an opaque atom
-    /// instead: it never creates a boundary on either side — unless `(`
-    /// follows the `]`, in which case it is an ordinary link whose text
-    /// happens to look like a footnote.
+    /// `[`: inline-link text (`[text](url)`) is prose and decides the left
+    /// boundary. Everything else bracketed is an opaque atom instead — see
+    /// below — and never creates a boundary on either side.
     fn on_bracket_open(&mut self) {
         let len = self.input.len();
         if self.pos + 1 < len && self.input[self.pos + 1] == b'^'
@@ -453,6 +451,18 @@ impl<'a> Formatter<'a> {
             self.prev = Some(Class::Other);
             self.pos += 2 + off + 1;
             return;
+        }
+        // A bracketed group that is NOT an inline link (no `(` after `]`)
+        // is an opaque atom — reference-style/shortcut links and literal
+        // bracket annotations alike: like parens and quotes, the brackets
+        // hug their content and never create boundaries.
+        if let Some(off) = memchr(b']', &self.input[self.pos + 1..]) {
+            let close = self.pos + 1 + off;
+            if self.input.get(close + 1) != Some(&b'(') {
+                self.prev = Some(Class::Other);
+                self.pos = close + 1;
+                return;
+            }
         }
         // Link text is prose: a code span inside it decides the boundary by
         // its interior content.

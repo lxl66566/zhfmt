@@ -113,12 +113,14 @@ fn links() {
     // URL content never influences the outer boundary.
     unchanged!("[中文](https://english-url.com)格式");
     changed!("[link](https://url)格式", "[link](https://url) 格式");
-    // Reference-style / plain brackets.
-    changed!("中文[note]english", "中文 [note]english");
-    changed!("中文[note]中文", "中文 [note] 中文");
-    // The right boundary is decided by the bracket content too, even though
-    // the Latin neighbor never wakes the scanner.
-    changed!("中文[中文]english", "中文[中文] english");
+    // Reference-style / plain brackets are opaque atoms: whether `[note]`
+    // is a shortcut reference link or a literal bracket annotation cannot
+    // be decided locally, so — like parens and quotes — the brackets hug
+    // their content and never create boundaries.
+    unchanged!("中文[note]english");
+    unchanged!("中文[note]中文");
+    unchanged!("中文[中文]english");
+    // Inline links keep their text-decided boundaries.
     changed!("中[中文](url)b", "中[中文](url) b");
     changed!("中**中文**b", "中**中文** b");
     changed!("中`中文`b", "中`中文` b");
