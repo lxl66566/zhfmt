@@ -355,8 +355,10 @@ fn footnote_refs() {
     unchanged!("“三分饥[^2]和寒”");
     // Footnote definitions: the marker is opaque, the body is prose.
     changed!("[^1]: 参考reference文献", "[^1]: 参考 reference 文献");
-    // Even before `(`, `[^...]` stays opaque (conservative).
-    unchanged!("见[^top](https://url)条目");
+    // `[^text]` followed by `(` is an ordinary link whose text happens to
+    // look like a footnote; the right boundary is decided by the link text
+    // (the leading `[` still blocks the left boundary).
+    changed!("见[^top](https://url)条目", "见[^top](https://url) 条目");
 }
 
 #[test]

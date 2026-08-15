@@ -441,15 +441,18 @@ impl<'a> Formatter<'a> {
 
     /// `[`: the following content decides the left boundary (link text or
     /// plain bracket content). A footnote reference `[^id]` is an opaque atom
-    /// instead: it never creates a boundary on either side.
+    /// instead: it never creates a boundary on either side — unless `(`
+    /// follows the `]`, in which case it is an ordinary link whose text
+    /// happens to look like a footnote.
     fn on_bracket_open(&mut self) {
         let len = self.input.len();
-        if self.pos + 1 < len && self.input[self.pos + 1] == b'^' {
-            if let Some(off) = memchr(b']', &self.input[self.pos + 2..]) {
-                self.prev = Some(Class::Other);
-                self.pos += 2 + off + 1;
-                return;
-            }
+        if self.pos + 1 < len && self.input[self.pos + 1] == b'^'
+            && let Some(off) = memchr(b']', &self.input[self.pos + 2..])
+            && self.input.get(self.pos + 2 + off + 1) != Some(&b'(')
+        {
+            self.prev = Some(Class::Other);
+            self.pos += 2 + off + 1;
+            return;
         }
         // Link text is prose: a code span inside it decides the boundary by
         // its interior content.
