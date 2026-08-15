@@ -47,6 +47,7 @@ const fn wake_in_word(w: u64) -> bool {
         || has_byte(w, b'<')
         || has_byte(w, b'*')
         || has_byte(w, b'~')
+        || has_byte(w, b'\n')
 }
 
 // Long-range scanner continuations: SWAR loops used directly on
@@ -248,12 +249,12 @@ mod x86 {
     // callee-saved XMM prologue, which would otherwise dominate short scans
     // (ymm6-15 are non-volatile on Windows x64).
     #[rustfmt::skip]
-    static WAKE_BYTES: [[u8; 32]; 6] = [
-        [b'`'; 32], [b'['; 32], [b']'; 32], [b'<'; 32], [b'*'; 32], [b'~'; 32],
+    static WAKE_BYTES: [[u8; 32]; 7] = [
+        [b'`'; 32], [b'['; 32], [b']'; 32], [b'<'; 32], [b'*'; 32], [b'~'; 32], [b'\n'; 32],
     ];
     #[rustfmt::skip]
-    static WAKE_BYTES_128: [[u8; 16]; 6] = [
-        [b'`'; 16], [b'['; 16], [b']'; 16], [b'<' ; 16], [b'*'; 16], [b'~'; 16],
+    static WAKE_BYTES_128: [[u8; 16]; 7] = [
+        [b'`'; 16], [b'['; 16], [b']'; 16], [b'<' ; 16], [b'*'; 16], [b'~'; 16], [b'\n'; 16],
     ];
 
     /// Find the next wake byte at or after `from`; returns `input.len()` if none.
@@ -276,6 +277,7 @@ mod x86 {
             m = _mm256_or_si256(m, _mm256_cmpeq_epi8(c, loadu(&WAKE_BYTES[3])));
             m = _mm256_or_si256(m, _mm256_cmpeq_epi8(c, loadu(&WAKE_BYTES[4])));
             m = _mm256_or_si256(m, _mm256_cmpeq_epi8(c, loadu(&WAKE_BYTES[5])));
+            m = _mm256_or_si256(m, _mm256_cmpeq_epi8(c, loadu(&WAKE_BYTES[6])));
             // `movemask(c)` already carries the sign bit of every byte, which
             // marks the `>= 0x80` bytes; merge it in the GPR domain.
             let mask = _mm256_movemask_epi8(m) | _mm256_movemask_epi8(c);
@@ -347,6 +349,7 @@ mod x86 {
             m = _mm_or_si128(m, _mm_cmpeq_epi8(c, loadu128(&WAKE_BYTES_128[3])));
             m = _mm_or_si128(m, _mm_cmpeq_epi8(c, loadu128(&WAKE_BYTES_128[4])));
             m = _mm_or_si128(m, _mm_cmpeq_epi8(c, loadu128(&WAKE_BYTES_128[5])));
+            m = _mm_or_si128(m, _mm_cmpeq_epi8(c, loadu128(&WAKE_BYTES_128[6])));
             let mask = _mm_movemask_epi8(m) | _mm_movemask_epi8(c);
             if mask != 0 {
                 return i + (mask as u32).trailing_zeros() as usize;

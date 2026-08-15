@@ -74,6 +74,62 @@ pub(super) fn latin_after_punct(input: &[u8], from: usize) -> Option<usize> {
     None
 }
 
+/// Whether the line ending at `nl` (the position of its `\n`) is blank:
+/// only whitespace between it and the previous newline or the start.
+pub(super) fn prev_line_blank(input: &[u8], nl: usize) -> bool {
+    let mut j = nl;
+    while j > 0 && matches!(input[j - 1], b' ' | b'\t' | b'\r') {
+        j -= 1;
+    }
+    j == 0 || input[j - 1] == b'\n'
+}
+
+/// Whether the line starting at `line` is an indented code line: 4+ spaces
+/// or a tab, then non-whitespace content (blank lines are not code).
+pub(super) fn is_indented_code_line(input: &[u8], line: usize) -> bool {
+    let rest = &input[line..];
+    let content = if rest.starts_with(b"\t") {
+        &rest[1..]
+    } else if rest.starts_with(b"    ") {
+        &rest[4..]
+    } else {
+        return false;
+    };
+    // Deeper indentation is fine; what matters is non-blank content.
+    let mut i = 0;
+    while i < content.len() && matches!(content[i], b' ' | b'\t') {
+        i += 1;
+    }
+    !matches!(content.get(i), None | Some(b'\n' | b'\r'))
+}
+
+/// Whether the line starting at `line` contains only whitespace.
+fn is_blank_line(input: &[u8], line: usize) -> bool {
+    let mut i = line;
+    while i < input.len() && matches!(input[i], b' ' | b'\t' | b'\r') {
+        i += 1;
+    }
+    input.get(i).is_none_or(|&b| b == b'\n')
+}
+
+/// Consume an indented code block starting at `line` (which must satisfy
+/// [`is_indented_code_line`]): all following lines that are indented or
+/// blank. Returns the start of the first line that ends the block.
+pub(super) fn scan_indented_code(input: &[u8], mut line: usize) -> usize {
+    loop {
+        let Some(nl) = memchr(b'\n', &input[line..]).map(|o| line + o) else {
+            return input.len();
+        };
+        let next = nl + 1;
+        if next < input.len() && (is_blank_line(input, next) || is_indented_code_line(input, next))
+        {
+            line = next;
+        } else {
+            return next;
+        }
+    }
+}
+
 /// YAML front matter at the very start of a document: an opening `---`
 /// line, then lines until a closing `---` or `...` line. Static-site
 /// generators treat the block as metadata; its strings are hardcoded

@@ -6,8 +6,8 @@
 //!   or at a structural delimiter (`` ` ``, `[`, `]`) whose inner content decides the boundary.
 //!   Everything else is copied verbatim. The scanner therefore skips over "boring" bytes with a
 //!   hybrid scan (inline SWAR first word + SIMD continuation: AVX2 / SSE2 on x86_64, selected at
-//!   runtime; SWAR elsewhere) and only wakes on bytes `>= 0x80` and the three structural
-//!   delimiters. See [`scan`] for the scanning layer.
+//!   runtime; SWAR elsewhere) and only wakes on bytes `>= 0x80`, the structural delimiters and `\n`
+//!   (line starts matter for indented code blocks). See [`scan`] for the scanning layer.
 //! - Consecutive multibyte characters are processed as one *run*: `Latin` is always ASCII, so no
 //!   boundary can exist between two multibyte chars. Only the first and last char of a run are
 //!   classified; the interior is skipped with a "first ASCII byte" scan. Malformed runs fall back
@@ -30,6 +30,9 @@
 //!
 //! - Code spans (`` `...` ``) and link URLs (`[text](url)`) are skipped over; the boundary of a
 //!   code span / link is decided by the first/last *content* character inside it.
+//! - Fenced code blocks are skipped as one big code span via backtick-run pairing; indented code
+//!   blocks (a line indented by 4+ spaces or a tab, following a blank line) and YAML front matter
+//!   are skipped verbatim — their content is hardcode, never prose.
 //! - HTML tags (`<...>`) and footnote references (`[^id]`) are opaque atoms: their interiors
 //!   (including attribute values such as `title="中文"`) are never formatted, and they block
 //!   boundaries on both sides. HTML comments (`<!-- ... -->`) keep the opaque boundary behavior but
@@ -41,8 +44,8 @@
 //!   tags/comments atomically (a `*` inside them is code or markup, never a delimiter), so a stray
 //!   prose `*` can never pair into a span and desync the backtick pairing. An opener whose closer
 //!   lies beyond the window is paired with it optimistically (pending opener), keeping spaces
-//!   outside the markers as well; any other unpaired run is literal text and its boundary hugs
-//!   the CJK side.
+//!   outside the markers as well; any other unpaired run is literal text and its boundary hugs the
+//!   CJK side.
 //!
 //! Module layout: [`scan`] locates the next interesting byte, [`boundary`]
 //! decides effective classes and construct extents, and this module holds the
@@ -60,8 +63,9 @@ mod scan;
 
 use boundary::{
     MAX_EMPHASIS_SPAN, crosses, find_closing_run, find_code_span, find_comment_end, find_url_end,
-    front_matter_end, is_space_byte, last_content_class, latin_after_punct, lookback_class,
-    peek_forward_class, prose_first_class, prose_last_class, run_len, scan_html_tag,
+    front_matter_end, is_indented_code_line, is_space_byte, last_content_class, latin_after_punct,
+    lookback_class, peek_forward_class, prev_line_blank, prose_first_class, prose_last_class,
+    run_len, scan_html_tag, scan_indented_code,
 };
 use scan::{Scan, find_ascii, find_wake};
 
@@ -132,6 +136,11 @@ impl<'a> Formatter<'a> {
         if let Some(end) = front_matter_end(self.input) {
             self.pos = end;
         }
+        // An indented code block may also open the document (or directly
+        // follow the front matter).
+        if is_indented_code_line(self.input, self.pos) {
+            self.pos = scan_indented_code(self.input, self.pos);
+        }
         while self.pos < len {
             let wake = find_wake(self.input, self.pos, self.scan.wake());
             if wake > self.pos {
@@ -147,6 +156,7 @@ impl<'a> Formatter<'a> {
                 b']' => self.on_bracket_close(),
                 b'<' => self.on_tag(),
                 b'*' | b'~' => self.on_emphasis(),
+                b'\n' => self.on_newline(),
                 _ => self.on_multibyte(),
             }
         }
@@ -305,20 +315,16 @@ impl<'a> Formatter<'a> {
 
     /// An emphasis run (`*` or `~`). Three outcomes:
     ///
-    /// - A closing run of the same length exists within the bounded window
-    ///   ([`MAX_EMPHASIS_SPAN`]): the run pair is a wrapper — the outer
-    ///   boundary is decided by the interior's content, spaces are only
-    ///   placed *outside* the markers, and the interior is formatted
-    ///   recursively.
-    /// - No closer within the window, but the delimiter occurs again farther
-    ///   ahead ([`Self::delim_beyond`]): the run is likely an opener whose
-    ///   closer lies beyond the window. It is recorded as pending and the
-    ///   matching later run becomes its closer; both edges behave like the
-    ///   wrapper case, so a space never lands between a marker and its
-    ///   content (which would destroy the delimiter's flanking and disable
-    ///   the emphasis in the rendered output).
-    /// - Otherwise the run is literal text: the boundary hugs the CJK side,
-    ///   as if the markers weren't there.
+    /// - A closing run of the same length exists within the bounded window ([`MAX_EMPHASIS_SPAN`]):
+    ///   the run pair is a wrapper — the outer boundary is decided by the interior's content,
+    ///   spaces are only placed *outside* the markers, and the interior is formatted recursively.
+    /// - No closer within the window, but the delimiter occurs again farther ahead
+    ///   ([`Self::delim_beyond`]): the run is likely an opener whose closer lies beyond the window.
+    ///   It is recorded as pending and the matching later run becomes its closer; both edges behave
+    ///   like the wrapper case, so a space never lands between a marker and its content (which
+    ///   would destroy the delimiter's flanking and disable the emphasis in the rendered output).
+    /// - Otherwise the run is literal text: the boundary hugs the CJK side, as if the markers
+    ///   weren't there.
     fn on_emphasis(&mut self) {
         let len = self.input.len();
         let c = self.input[self.pos];
@@ -447,12 +453,28 @@ impl<'a> Formatter<'a> {
         hit.is_some()
     }
 
+    /// `\n`: line boundaries matter for exactly one construct — indented
+    /// code blocks. A line indented by 4+ spaces or a tab that follows a
+    /// blank line (or opens the document) is code: CommonMark says indented
+    /// code cannot interrupt a paragraph. Its content is hardcode, never
+    /// prose, so the whole block is skipped verbatim.
+    fn on_newline(&mut self) {
+        self.prev = None;
+        let line = self.pos + 1;
+        if prev_line_blank(self.input, self.pos) && is_indented_code_line(self.input, line) {
+            self.pos = scan_indented_code(self.input, line);
+        } else {
+            self.pos += 1;
+        }
+    }
+
     /// `[`: inline-link text (`[text](url)`) is prose and decides the left
     /// boundary. Everything else bracketed is an opaque atom instead — see
     /// below — and never creates a boundary on either side.
     fn on_bracket_open(&mut self) {
         let len = self.input.len();
-        if self.pos + 1 < len && self.input[self.pos + 1] == b'^'
+        if self.pos + 1 < len
+            && self.input[self.pos + 1] == b'^'
             && let Some(off) = memchr(b']', &self.input[self.pos + 2..])
             && self.input.get(self.pos + 2 + off + 1) != Some(&b'(')
         {

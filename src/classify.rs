@@ -51,12 +51,12 @@ const ASCII_CLASS: [Class; 128] = {
 };
 
 /// Whether this byte can wake the SWAR scanner: non-ASCII, a hard delimiter,
-/// or the start of a structural construct (`<` for HTML tags, `*`/`~` for
-/// emphasis runs).
+/// the start of a structural construct (`<` for HTML tags, `*`/`~` for
+/// emphasis runs), or a newline (indented code blocks are line-level).
 #[inline(always)]
 #[must_use]
 pub const fn is_wake_byte(b: u8) -> bool {
-    b >= 0x80 || matches!(b, b'`' | b'[' | b']' | b'<' | b'*' | b'~')
+    b >= 0x80 || matches!(b, b'`' | b'[' | b']' | b'<' | b'*' | b'~' | b'\n')
 }
 
 #[inline(always)]

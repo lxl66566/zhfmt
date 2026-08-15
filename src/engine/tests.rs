@@ -299,6 +299,30 @@ fn markdown_documents() {
 }
 
 #[test]
+fn indented_code_block_untouched() {
+    // Indented code after a blank line: hardcode stays untouched.
+    unchanged!("上文\n\n    let s = \"中文test混排\";\n\n下文");
+    // Prose around it is still formatted; multiple indented lines and
+    // interior blank lines belong to the same block.
+    changed!(
+        "上文a\n\n    中文test代码\n\n    第二行x代码\n\n下文b",
+        "上文 a\n\n    中文test代码\n\n    第二行x代码\n\n下文 b"
+    );
+    // Tab-indented line.
+    unchanged!("上\n\n\t中文test混排\n下");
+    // Lazy continuation: an indented line that does NOT follow a blank line
+    // is paragraph text, not code.
+    changed!(
+        "段落\n    缩进continues中文",
+        "段落\n    缩进 continues 中文"
+    );
+    // Indented code opening the document.
+    unchanged!("    中文test代码\n\n正文");
+    // An indented blank line is not code.
+    changed!("上文x\n    \n下文y", "上文 x\n    \n下文 y");
+}
+
+#[test]
 fn front_matter_untouched() {
     // YAML front matter is metadata: hardcoded strings stay untouched,
     // the body is formatted.
