@@ -66,11 +66,22 @@ fn fullwidth_punctuation_neutral() {
 }
 
 #[test]
-fn halfwidth_punctuation_blocks() {
-    unchanged!("中文,english");
+fn halfwidth_trailing_punct_attaches() {
+    // Trailing halfwidth punctuation attaches to the preceding word; the
+    // boundary space goes after the punctuation run.
+    changed!("中文,english", "中文, english");
+    changed!("english,中文", "english, 中文");
+    changed!("中文;.english", "中文;. english");
+    changed!("C++语言", "C++ 语言");
+    changed!("100%增长", "100% 增长");
+    changed!("增长100%", "增长 100%");
+    changed!("圆周率约3.14", "圆周率约 3.14");
+    // Already spaced: nothing to do.
+    unchanged!("中文, english");
+    unchanged!("english, 中文");
+    // `!` is excluded: it would split `![alt](url)` images from preceding
+    // text. `@` and `/` stay blocking (addresses, paths).
     unchanged!("中文!english");
-    unchanged!("C++语言");
-    unchanged!("100%增长");
     unchanged!("user@中文");
     unchanged!("中文/path/to");
 }

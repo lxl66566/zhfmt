@@ -49,6 +49,31 @@ pub(super) fn peek_forward_class(input: &[u8], from: usize) -> Option<Class> {
     None
 }
 
+/// Halfwidth punctuation that attaches to the preceding word: looking
+/// backward across it is transparent, so `中文,english` spaces after the
+/// comma and `C++语言` after the pluses. `!` is excluded (it would split
+/// `![alt](url)` images from preceding text); quotes and parens stay opaque
+/// by design.
+#[inline(always)]
+pub(super) const fn is_trailing_punct(b: u8) -> bool {
+    matches!(b, b',' | b'.' | b';' | b':' | b'?' | b'%' | b'+')
+}
+
+/// If a run of trailing punctuation starting at `from` is immediately
+/// followed by an ASCII Latin char, return that char's position — the
+/// insertion point after the punctuation run (`中文,english` → before `e`).
+#[inline]
+pub(super) fn latin_after_punct(input: &[u8], from: usize) -> Option<usize> {
+    let mut i = from;
+    while input.get(i).is_some_and(|&b| is_trailing_punct(b)) {
+        i += 1;
+    }
+    if i > from && input.get(i).is_some_and(u8::is_ascii_alphanumeric) {
+        return Some(i);
+    }
+    None
+}
+
 /// Class of the last content char before `pos`, used after copying a pure
 /// ASCII run. `Soft` chars are skipped; a `Hard` char or the region start
 /// means the boundary was already decided by a previous event, so the current
@@ -65,6 +90,8 @@ pub(super) fn lookback_class(
         if b < 0x80 {
             match ascii_class(b) {
                 Class::Soft => j -= 1,
+                // Trailing punctuation attaches to the preceding word.
+                _ if is_trailing_punct(b) => j -= 1,
                 Class::Space => return None,
                 Class::Hard => return prev,
                 c => return Some(c),
