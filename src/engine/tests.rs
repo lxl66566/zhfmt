@@ -299,6 +299,18 @@ fn markdown_documents() {
 }
 
 #[test]
+fn autolinks_tables_and_reference_definitions() {
+    // Autolinks are opaque atoms, like HTML tags.
+    unchanged!("见<https://example.com/x>网站");
+    unchanged!("见<user@example.com>网站");
+    // Table cells are prose; the pipes block.
+    changed!("| 甲a | 乙b |", "| 甲 a | 乙 b |");
+    // Reference definitions: the `[id]` marker is opaque (bare brackets),
+    // the URL is plain text.
+    unchanged!("[1]: https://example.com");
+}
+
+#[test]
 fn indented_code_block_untouched() {
     // Indented code after a blank line: hardcode stays untouched.
     unchanged!("上文\n\n    let s = \"中文test混排\";\n\n下文");
