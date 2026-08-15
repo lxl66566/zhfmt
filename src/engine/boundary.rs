@@ -49,23 +49,6 @@ pub(super) fn peek_forward_class(input: &[u8], from: usize) -> Option<Class> {
     None
 }
 
-/// Whether the next *content* char at or after `from` is ASCII Latin,
-/// looking through [`Class::Soft`] delimiters. Equivalent to
-/// `peek_forward_class(input, from) == Some(Class::Latin)` but without
-/// decoding multibyte chars: `Latin` is always ASCII, so any byte `>= 0x80`
-/// immediately rules it out. `Soft` is likewise ASCII-only (`*`, `~`).
-#[inline]
-pub(super) fn next_is_latin(input: &[u8], from: usize) -> bool {
-    let mut i = from;
-    while i < input.len() {
-        match input[i] {
-            b'*' | b'~' => i += 1,
-            b => return b.is_ascii_alphanumeric(),
-        }
-    }
-    false
-}
-
 /// Class of the last content char before `pos`, used after copying a pure
 /// ASCII run. `Soft` chars are skipped; a `Hard` char or the region start
 /// means the boundary was already decided by a previous event, so the current

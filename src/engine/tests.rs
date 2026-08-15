@@ -403,10 +403,15 @@ fn emphasis_pairing_window() {
         &format!("a**{inner}**b"),
         format!("a **{inner}** b").as_str()
     );
-    // Interior beyond the window: delimiters stay unpaired (transparent),
-    // so the boundaries move inside the markers.
+    // Interior beyond the window: the opener pairs optimistically with the
+    // far closer, so spaces still go OUTSIDE the markers — inserting them
+    // inside (`a** {far} **b`) would destroy the delimiters' flanking and
+    // disable the emphasis in the rendered output.
     let far = "中".repeat(2000); // 6000 bytes > MAX_EMPHASIS_SPAN
-    changed!(&format!("a**{far}**b"), format!("a** {far} **b").as_str());
+    let input = format!("a**{far}**b");
+    let expected = format!("a **{far}** b");
+    assert_eq!(fmt(&input), expected);
+    assert_eq!(fmt(&expected), expected, "not idempotent: {input:?}");
 }
 
 #[test]

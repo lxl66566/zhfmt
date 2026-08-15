@@ -38,9 +38,11 @@
 //!   exists within a bounded window (see [`MAX_EMPHASIS_SPAN`]): the outer boundary is decided by
 //!   the interior's content and spaces are only ever placed *outside* the markers, so `CG**鉴赏**`
 //!   becomes `CG **鉴赏**`, never `CG** 鉴赏**`. The closer search skips code spans and HTML
-//!   tags/comments atomically (a `*` inside them is code/markup, never a delimiter), so a stray
-//!   prose `*` can never pair into a span and desync the backtick pairing. Unpaired runs stay
-//!   transparent ([`Class::Soft`]).
+//!   tags/comments atomically (a `*` inside them is code or markup, never a delimiter), so a stray
+//!   prose `*` can never pair into a span and desync the backtick pairing. An opener whose closer
+//!   lies beyond the window is paired with it optimistically (pending opener), keeping spaces
+//!   outside the markers as well; any other unpaired run is literal text and its boundary hugs
+//!   the CJK side.
 //!
 //! Module layout: [`scan`] locates the next interesting byte, [`boundary`]
 //! decides effective classes and construct extents, and this module holds the
@@ -58,8 +60,8 @@ mod scan;
 
 use boundary::{
     MAX_EMPHASIS_SPAN, crosses, find_closing_run, find_code_span, find_comment_end, find_url_end,
-    is_space_byte, last_content_class, lookback_class, next_is_latin, peek_forward_class,
-    prose_first_class, prose_last_class, run_len, scan_html_tag,
+    is_space_byte, last_content_class, lookback_class, peek_forward_class, prose_first_class,
+    prose_last_class, run_len, scan_html_tag,
 };
 use scan::{Scan, find_ascii, find_wake};
 
@@ -67,6 +69,18 @@ use scan::{Scan, find_ascii, find_wake};
 #[must_use]
 pub fn format(input: &[u8]) -> Option<Vec<u8>> {
     Formatter::new(input).run()
+}
+
+/// Which side of an emphasis run a boundary space belongs to; see
+/// [`Formatter::emphasis_edge`].
+#[derive(Clone, Copy)]
+enum RunRole {
+    /// Opening markers: the space goes before the run.
+    Open,
+    /// Closing markers: the space goes after the run.
+    Close,
+    /// Literal (unpaired) markers: the space hugs the CJK side.
+    Literal,
 }
 
 struct Formatter<'a> {
@@ -81,6 +95,14 @@ struct Formatter<'a> {
     prev: Option<Class>,
     /// Position of the most recent `[` (candidate link-text start).
     last_bracket_open: Option<usize>,
+    /// Openers whose closer lies beyond the emphasis pairing window, awaiting
+    /// that far closer: `pending_star[len - 1]` tracks `*` runs of length
+    /// 1..=3, `pending_tilde` tracks `~~`.
+    pending_star: [bool; 3],
+    pending_tilde: bool,
+    /// Memoized "delimiter occurs beyond the window" tail searches, one slot
+    /// per delimiter byte (`*` at 0, `~` at 1); see [`Self::delim_beyond`].
+    tail_memo: [Option<(usize, Option<usize>)>; 2],
     /// SIMD/SWAR scanners selected for this CPU.
     scan: Scan,
 }
@@ -94,6 +116,9 @@ impl<'a> Formatter<'a> {
             last: 0,
             prev: None,
             last_bracket_open: None,
+            pending_star: [false; 3],
+            pending_tilde: false,
+            tail_memo: [None; 2],
             scan: Scan::select(),
         }
     }
@@ -184,7 +209,12 @@ impl<'a> Formatter<'a> {
                 self.insert_space(start);
             }
         }
-        if last_class == Class::Cjk && next_is_latin(self.input, end) {
+        if last_class == Class::Cjk
+            && self
+                .input
+                .get(end)
+                .is_some_and(u8::is_ascii_alphanumeric)
+        {
             self.insert_space(end);
         }
         self.prev = Some(last_class);
@@ -265,48 +295,148 @@ impl<'a> Formatter<'a> {
         self.pos = scan_html_tag(self.input, self.pos).unwrap_or(self.pos + 1);
     }
 
-    /// An emphasis run (`*` or `~`): try to pair it with a closing run of the
-    /// same delimiter and length. A paired run is a wrapper — the outer
-    /// boundary is decided by the interior's first/last content char, spaces
-    /// are only placed *outside* the markers, and the interior is formatted
-    /// recursively. Unpaired runs stay transparent ([`Class::Soft`]).
+    /// An emphasis run (`*` or `~`). Three outcomes:
+    ///
+    /// - A closing run of the same length exists within the bounded window
+    ///   ([`MAX_EMPHASIS_SPAN`]): the run pair is a wrapper — the outer
+    ///   boundary is decided by the interior's content, spaces are only
+    ///   placed *outside* the markers, and the interior is formatted
+    ///   recursively.
+    /// - No closer within the window, but the delimiter occurs again farther
+    ///   ahead ([`Self::delim_beyond`]): the run is likely an opener whose
+    ///   closer lies beyond the window. It is recorded as pending and the
+    ///   matching later run becomes its closer; both edges behave like the
+    ///   wrapper case, so a space never lands between a marker and its
+    ///   content (which would destroy the delimiter's flanking and disable
+    ///   the emphasis in the rendered output).
+    /// - Otherwise the run is literal text: the boundary hugs the CJK side,
+    ///   as if the markers weren't there.
     fn on_emphasis(&mut self) {
         let len = self.input.len();
         let c = self.input[self.pos];
-        let mut n = 0;
-        while self.pos + n < len && self.input[self.pos + n] == c {
-            n += 1;
-        }
-        // Strikethrough is `~~`; a single `~` stays transparent.
+        let n = run_len(self.input, self.pos, c);
+        // Strikethrough is `~~`; a single `~` stays literal.
         let pairable = c == b'*' || n == 2;
         let after = self.pos + n;
         // An opening run must be immediately followed by a non-whitespace
-        // char (crude CommonMark left-flanking; rejects list bullets `* `).
-        if pairable && after < len && !is_space_byte(self.input[after]) {
-            // The closer search is bounded (see MAX_EMPHASIS_SPAN): without
-            // the window, inputs like `*a *a *a ...` would rescan the whole
-            // input per opening run. Delimiters farther apart than the
-            // window stay unpaired.
-            let until = (after + MAX_EMPHASIS_SPAN).min(len);
-            if let Some(close) = find_closing_run(self.input, after, until, c, n) {
-                let interior = &self.input[after..close];
-                // Prose interior: paired code spans inside decide the
-                // wrapper's boundary by their content.
-                let first = prose_first_class(interior);
-                // `self.pos > self.last`: a CJK char's forward peek may have
-                // already inserted a space at this exact position.
-                if self.pos > self.last && crosses(self.prev, first) {
-                    self.insert_space(self.pos);
-                }
-                self.splice_formatted(after..close);
-                self.prev = prose_last_class(interior);
-                self.pos = close + n;
-                self.insert_right_boundary();
+        // char, a closing run immediately preceded by one (crude CommonMark
+        // flanking; the former rejects list bullets `* `).
+        let left_flanking = after < len && !is_space_byte(self.input[after]);
+        let right_flanking = self.pos > 0 && !is_space_byte(self.input[self.pos - 1]);
+        if pairable {
+            // A closer matches the oldest pending opener first, mirroring
+            // CommonMark's delimiter stack.
+            if right_flanking && self.take_pending(c, n) {
+                self.emphasis_edge(after, RunRole::Close);
+                self.pos = after;
                 return;
             }
+            if left_flanking {
+                // The closer search is bounded (see MAX_EMPHASIS_SPAN):
+                // without the window, inputs like `*a *a *a ...` would
+                // rescan the whole input per opening run.
+                let until = (after + MAX_EMPHASIS_SPAN).min(len);
+                if let Some(close) = find_closing_run(self.input, after, until, c, n) {
+                    let interior = &self.input[after..close];
+                    // Prose interior: paired code spans inside decide the
+                    // wrapper's boundary by their content.
+                    let first = prose_first_class(interior);
+                    // `self.pos > self.last`: defensive against double
+                    // insertion if a previous handler already inserted here.
+                    if self.pos > self.last && crosses(self.prev, first) {
+                        self.insert_space(self.pos);
+                    }
+                    self.splice_formatted(after..close);
+                    self.prev = prose_last_class(interior);
+                    self.pos = close + n;
+                    self.insert_right_boundary();
+                    return;
+                }
+                if self.delim_beyond(c, until) && self.set_pending(c, n) {
+                    self.emphasis_edge(after, RunRole::Open);
+                    self.pos = after;
+                    return;
+                }
+            }
         }
-        // Unpaired: transparent delimiter, keep `prev`.
-        self.pos += n;
+        self.emphasis_edge(after, RunRole::Literal);
+        self.pos = after;
+    }
+
+    /// Boundary handling for the seams around an emphasis run whose role is
+    /// `role`; `after` is the position just past the run. A run that already
+    /// hugs whitespace on either side belongs to the other side's content —
+    /// its seams are already expressed, so nothing is inserted (this keeps
+    /// the transform idempotent).
+    fn emphasis_edge(&mut self, after: usize, role: RunRole) {
+        let Some(first) = peek_forward_class(self.input, after) else {
+            // Whitespace, a hard delimiter or EOI follows: that seam is owned
+            // by the following construct's handler (or nobody).
+            if self.input.get(after).is_some_and(|&b| is_space_byte(b)) {
+                self.prev = None;
+            }
+            return;
+        };
+        let hugged = (self.pos > 0 && is_space_byte(self.input[self.pos - 1]))
+            || is_space_byte(self.input[after]);
+        if !hugged && crosses(self.prev, Some(first)) {
+            match role {
+                // Spaces outside the markers keep the delimiter's flanking.
+                RunRole::Open => self.insert_space(self.pos),
+                RunRole::Close => self.insert_space(after),
+                // Literal markers: the space hugs the CJK side, as if the
+                // run weren't there.
+                RunRole::Literal => match self.prev {
+                    Some(Class::Cjk) => self.insert_space(self.pos),
+                    _ => self.insert_space(after),
+                },
+            }
+        }
+        self.prev = Some(first);
+    }
+
+    /// The pending-opener slot for delimiter `c` and run length `n`. `*`
+    /// runs longer than 3 are too rare to track (they degrade to literal);
+    /// only `~~` is pairable among `~` runs (see [`Self::on_emphasis`]).
+    fn pending_slot(&mut self, c: u8, n: usize) -> Option<&mut bool> {
+        match c {
+            b'~' => Some(&mut self.pending_tilde),
+            b'*' => self.pending_star.get_mut(n - 1),
+            _ => None,
+        }
+    }
+
+    /// Record an opener whose closer lies beyond the pairing window.
+    /// Returns false when the run length is not trackable.
+    fn set_pending(&mut self, c: u8, n: usize) -> bool {
+        if let Some(slot) = self.pending_slot(c, n) {
+            *slot = true;
+            return true;
+        }
+        false
+    }
+
+    /// Consume a pending opener matching this run, if any.
+    fn take_pending(&mut self, c: u8, n: usize) -> bool {
+        self.pending_slot(c, n).is_some_and(std::mem::take)
+    }
+
+    /// Whether delimiter `c` occurs again at or after `from` (i.e. beyond
+    /// the pairing window). The tail `memchr` is O(remaining input) per
+    /// call, but a memoized hit stays valid for every later query starting
+    /// at or before it, so the total stays linear on pathological inputs
+    /// like `*a *a *a ...`.
+    fn delim_beyond(&mut self, c: u8, from: usize) -> bool {
+        let slot = &mut self.tail_memo[usize::from(c == b'~')];
+        if let Some((query, hit)) = *slot
+            && query <= from
+            && hit.is_none_or(|h| h >= from)
+        {
+            return hit.is_some();
+        }
+        let hit = memchr(c, &self.input[from..]).map(|o| from + o);
+        *slot = Some((from, hit));
+        hit.is_some()
     }
 
     /// `[`: the following content decides the left boundary (link text or
