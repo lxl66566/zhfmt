@@ -239,7 +239,8 @@ mod x86 {
 
     use core::arch::x86_64::{
         __m128i, __m256i, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_or_si128,
-        _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_movemask_epi8, _mm256_or_si256,
+        _mm256_and_si256, _mm256_cmpgt_epi8, _mm256_loadu_si256, _mm256_movemask_epi8,
+        _mm256_or_si256, _mm256_setzero_si256, _mm256_shuffle_epi8, _mm256_srli_epi16,
     };
 
     use super::is_wake_byte;
@@ -249,13 +250,33 @@ mod x86 {
     // callee-saved XMM prologue, which would otherwise dominate short scans
     // (ymm6-15 are non-volatile on Windows x64).
     #[rustfmt::skip]
-    static WAKE_BYTES: [[u8; 32]; 7] = [
-        [b'`'; 32], [b'['; 32], [b']'; 32], [b'<'; 32], [b'*'; 32], [b'~'; 32], [b'\n'; 32],
-    ];
-    #[rustfmt::skip]
     static WAKE_BYTES_128: [[u8; 16]; 7] = [
         [b'`'; 16], [b'['; 16], [b']'; 16], [b'<' ; 16], [b'*'; 16], [b'~'; 16], [b'\n'; 16],
     ];
+
+    // Teddy-style nibble tables for the AVX2 wake scan: each wake byte owns a
+    // bucket bit, set at its low nibble in `WAKE_LO` and at its high nibble in
+    // `WAKE_HI`. A byte matches iff `WAKE_LO[b & 0xF] & WAKE_HI[b >> 4] != 0`.
+    // Every bucket appears at exactly one low and one high nibble, so the only
+    // (hi, lo) pairs with a shared bucket are the wake bytes themselves — the
+    // match is exact, which the engine relies on (an ASCII false positive
+    // would be dispatched to the multibyte-run handler).
+    //
+    // Buckets: `\n`=0x0A→1, `*`=0x2A→2, `<`=0x3C→4, `[`=0x5B→8, `]`=0x5D→16,
+    // `` ` ``=0x60→32, `~`=0x7E→64. High nibbles 8-F (non-ASCII) read 0; those
+    // bytes are caught separately via the sign bit. Each 16-byte table is
+    // duplicated into both lanes because `pshufb` is lane-local.
+    #[rustfmt::skip]
+    static WAKE_LO: [u8; 32] = [
+        32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 8, 4, 16, 64, 0,
+        32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 8, 4, 16, 64, 0,
+    ];
+    #[rustfmt::skip]
+    static WAKE_HI: [u8; 32] = [
+        1, 0, 2, 4, 0, 24, 32, 64, 0, 0, 0, 0, 0, 0, 0, 0,
+        1, 0, 2, 4, 0, 24, 32, 64, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+    static NIBBLE_MASK: [u8; 32] = [0x0f; 32];
 
     /// Find the next wake byte at or after `from`; returns `input.len()` if none.
     ///
@@ -271,16 +292,18 @@ mod x86 {
             let c = unsafe { input.as_ptr().add(i).cast::<__m256i>().read_unaligned() };
             // The `avx2` target feature is enabled for this function, so the
             // intrinsics below need no `unsafe` block.
-            let mut m = _mm256_cmpeq_epi8(c, loadu(&WAKE_BYTES[0]));
-            m = _mm256_or_si256(m, _mm256_cmpeq_epi8(c, loadu(&WAKE_BYTES[1])));
-            m = _mm256_or_si256(m, _mm256_cmpeq_epi8(c, loadu(&WAKE_BYTES[2])));
-            m = _mm256_or_si256(m, _mm256_cmpeq_epi8(c, loadu(&WAKE_BYTES[3])));
-            m = _mm256_or_si256(m, _mm256_cmpeq_epi8(c, loadu(&WAKE_BYTES[4])));
-            m = _mm256_or_si256(m, _mm256_cmpeq_epi8(c, loadu(&WAKE_BYTES[5])));
-            m = _mm256_or_si256(m, _mm256_cmpeq_epi8(c, loadu(&WAKE_BYTES[6])));
-            // `movemask(c)` already carries the sign bit of every byte, which
-            // marks the `>= 0x80` bytes; merge it in the GPR domain.
-            let mask = _mm256_movemask_epi8(m) | _mm256_movemask_epi8(c);
+            //
+            // `pshufb` with an index byte >= 0x80 yields 0, so non-ASCII bytes
+            // never match in the nibble domain; they are merged below through
+            // their sign bit instead.
+            let lo = _mm256_shuffle_epi8(loadu(&WAKE_LO), c);
+            let hi = _mm256_shuffle_epi8(loadu(&WAKE_HI), hi_nibbles(c));
+            let hits = _mm256_and_si256(lo, hi);
+            // Bucket values are <= 64, so a signed `cmpgt` against zero turns
+            // hits into 0xFF; OR-ing the chunk itself adds the non-ASCII sign
+            // bits, and a single movemask extracts both.
+            let m = _mm256_or_si256(_mm256_cmpgt_epi8(hits, _mm256_setzero_si256()), c);
+            let mask = _mm256_movemask_epi8(m);
             if mask != 0 {
                 return i + (mask as u32).trailing_zeros() as usize;
             }
@@ -290,6 +313,18 @@ mod x86 {
             i += 1;
         }
         i
+    }
+
+    /// Extract the high nibble of every byte into the low nibble.
+    ///
+    /// # Safety
+    ///
+    /// Requires AVX2 support at runtime.
+    #[target_feature(enable = "avx2")]
+    fn hi_nibbles(c: __m256i) -> __m256i {
+        // The 16-bit shift leaks the neighbor's low nibble into the top of
+        // each byte; the mask clears it.
+        _mm256_and_si256(_mm256_srli_epi16(c, 4), loadu(&NIBBLE_MASK))
     }
 
     /// Load a 32-byte constant as an AVX2 vector (memory operand).
@@ -449,5 +484,64 @@ impl Scan {
     /// The long-range continuation for [`find_ascii`].
     pub(super) fn ascii(&self) -> fn(&[u8], usize) -> usize {
         self.ascii
+    }
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod tests {
+    use super::{is_wake_byte, scalar, x86};
+
+    fn scalar_wake(input: &[u8], from: usize) -> usize {
+        (from..input.len())
+            .find(|&i| is_wake_byte(input[i]))
+            .unwrap_or(input.len())
+    }
+
+    /// Corpus exercising every byte value at several alignments, with long
+    /// clean stretches before/after so the SIMD loop is what finds the hits.
+    fn corpus() -> Vec<u8> {
+        let mut v = Vec::new();
+        for align in 0..8 {
+            v.extend(std::iter::repeat_n(b'a', 64 + align));
+            v.extend(0u8..=255);
+        }
+        v.extend(std::iter::repeat_n(b'z', 100));
+        v
+    }
+
+    #[test]
+    fn wake_avx2_matches_scalar() {
+        if !std::arch::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let input = corpus();
+        for from in 0..input.len() {
+            // SAFETY: AVX2 support was just detected at runtime.
+            let got = unsafe { x86::find_wake_avx2(&input, from) };
+            assert_eq!(got, scalar_wake(&input, from), "from={from}");
+        }
+    }
+
+    #[test]
+    fn ascii_avx2_matches_scalar() {
+        if !std::arch::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let input = corpus();
+        for from in 0..input.len() {
+            // SAFETY: AVX2 support was just detected at runtime.
+            let got = unsafe { x86::find_ascii_avx2(&input, from) };
+            assert_eq!(got, scalar::find_ascii(&input, from), "from={from}");
+        }
+    }
+
+    #[test]
+    fn wake_sse2_matches_scalar() {
+        let input = corpus();
+        for from in 0..input.len() {
+            // SAFETY: SSE2 is part of the x86_64 baseline.
+            let got = unsafe { x86::find_wake_sse2(&input, from) };
+            assert_eq!(got, scalar_wake(&input, from), "from={from}");
+        }
     }
 }
