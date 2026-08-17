@@ -214,6 +214,37 @@ fn exclude_and_include_match_relative_to_walk_root() {
 }
 
 #[test]
+fn config_whitelist_keeps_pairs_unspaced() {
+    let tmp = TempDir::new().unwrap();
+    write_file(
+        tmp.path(),
+        "zhfmt.json",
+        r#"{ "whitelist": ["B站", "3D"] }"#,
+    );
+    let md = write_file(tmp.path(), "a.md", "B站和3D建模");
+    let out = zhfmt().current_dir(tmp.path()).arg(".").output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(fs::read_to_string(&md).unwrap(), "B站和 3D 建模");
+}
+
+#[test]
+fn invalid_whitelist_config_exits_with_code_2() {
+    let tmp = TempDir::new().unwrap();
+    write_file(tmp.path(), "zhfmt.json", r#"{ "whitelist": ["B"] }"#);
+    let out = zhfmt().current_dir(tmp.path()).arg(".").output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("exactly two characters"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
 fn nonexistent_path_reports_error() {
     let tmp = TempDir::new().unwrap();
     let out = zhfmt()

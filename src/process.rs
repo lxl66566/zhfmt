@@ -20,7 +20,7 @@ use ignore::WalkState;
 use memmap2::MmapOptions;
 use snafu::{ResultExt, Snafu};
 
-use crate::config::Config;
+use crate::{FormatOptions, config::Config};
 
 const SMALL_FILE_THRESHOLD: u64 = 256 * 1024;
 
@@ -273,6 +273,11 @@ fn finish(
 
 /// Process a single file. Returns whether the content needs changes.
 pub fn process_file(path: &Path, opts: &RunOptions) -> Result<bool, ProcessError> {
+    // Engine options built once per file; an empty whitelist disables the
+    // check entirely (a single predictable branch per insertion point).
+    let fopts = FormatOptions {
+        whitelist: (!opts.config.whitelist.is_empty()).then_some(&opts.config.whitelist),
+    };
     // Open once and stat the handle: avoids a second path resolution per file.
     let mut file = fs::File::open(path).context(ReadSnafu { path })?;
     let meta = file.metadata().context(ReadSnafu { path })?;
@@ -285,7 +290,7 @@ pub fn process_file(path: &Path, opts: &RunOptions) -> Result<bool, ProcessError
         // Close the handle before finish(): on Windows, writing back via
         // rename would fail while our own handle is still open.
         drop(file);
-        let formatted = crate::format(&buf);
+        let formatted = crate::format_with(&buf, fopts);
         finish(path, opts, Some(&buf), formatted, &meta)
     } else {
         // SAFETY: the file is opened read-only and not modified by us while
@@ -293,7 +298,7 @@ pub fn process_file(path: &Path, opts: &RunOptions) -> Result<bool, ProcessError
         let mmap = unsafe { MmapOptions::new().map(&file).context(ReadSnafu { path })? };
         #[cfg(unix)]
         let _ = mmap.advise(memmap2::Advice::Sequential);
-        let formatted = crate::format(&mmap);
+        let formatted = crate::format_with(&mmap, fopts);
         if formatted.is_some() && opts.mode == Mode::Write {
             // On Windows, renaming over a file with a live mapping fails
             // (Access denied), so release the mapping and handle before

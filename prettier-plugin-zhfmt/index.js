@@ -1,6 +1,6 @@
 "use strict";
 
-const { format } = require("./wasm/zhfmt_wasm.js");
+const { format, format_with: formatWithWhitelist } = require("./wasm/zhfmt_wasm.js");
 const { parsers: markdownParsers } = require("prettier/plugins/markdown");
 // `prettier/doc` exposes `{ builders, printer, utils }`; older shapes export
 // the builders directly.
@@ -37,6 +37,17 @@ const languages = [
   },
 ];
 
+const options = {
+  zhfmtWhitelist: {
+    category: "Global",
+    type: "string",
+    array: true,
+    default: [{ value: [] }],
+    description:
+      "Character pairs between which no space is inserted; each entry is exactly two characters (e.g. \"B站\").",
+  },
+};
+
 /**
  * Pre-format with zhfmt, then delegate to the wrapped parser.
  *
@@ -52,7 +63,7 @@ function wrap(parser) {
   return {
     ...parser,
     preprocess: async (text, options) => {
-      const spaced = format(text);
+      const spaced = formatWithWhitelist(text, options.zhfmtWhitelist ?? []);
       const preprocessed = await parser.preprocess?.(spaced, options);
       return preprocessed ?? spaced;
     },
@@ -61,7 +72,7 @@ function wrap(parser) {
 
 const parsers = {
   zhfmt: {
-    parse: (text) => format(text),
+    parse: (text, options) => formatWithWhitelist(text, options.zhfmtWhitelist ?? []),
     astFormat,
     locStart: () => 0,
     locEnd: (node) => node.length,
@@ -77,4 +88,4 @@ const printers = {
   },
 };
 
-module.exports = { languages, parsers, printers };
+module.exports = { languages, parsers, printers, options };

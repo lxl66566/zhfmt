@@ -994,6 +994,7 @@ dependencies = [
 name = "zhfmt-wasm"
 version = "0.1.1"
 dependencies = [
+ "js-sys",
  "wasm-bindgen",
  "zhfmt",
 ]

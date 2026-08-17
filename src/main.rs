@@ -9,6 +9,7 @@ use std::{
 
 use clap::Parser;
 use zhfmt::{
+    FormatOptions,
     config::{self, Config},
     process::{self, Mode, RunOptions},
 };
@@ -66,15 +67,7 @@ fn resolve_config(cli: &Cli) -> Result<Config, String> {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    // stdin -> stdout pipeline mode.
-    if cli.paths.is_empty() && !std::io::stdin().is_terminal() {
-        if cli.check || cli.diff {
-            eprintln!("error: --check/--diff cannot be combined with stdin input");
-            return ExitCode::from(2);
-        }
-        return run_stdin();
-    }
-
+    // Config applies to every mode, including the stdin pipeline.
     let mut config = match resolve_config(&cli) {
         Ok(c) => c,
         Err(e) => {
@@ -87,6 +80,15 @@ fn main() -> ExitCode {
     }
     if let Some(jobs) = cli.jobs {
         config.jobs = jobs;
+    }
+
+    // stdin -> stdout pipeline mode.
+    if cli.paths.is_empty() && !std::io::stdin().is_terminal() {
+        if cli.check || cli.diff {
+            eprintln!("error: --check/--diff cannot be combined with stdin input");
+            return ExitCode::from(2);
+        }
+        return run_stdin(&config);
     }
 
     let mode = if cli.check {
@@ -136,13 +138,16 @@ fn main() -> ExitCode {
     }
 }
 
-fn run_stdin() -> ExitCode {
+fn run_stdin(config: &Config) -> ExitCode {
     let mut buf = Vec::new();
     if let Err(e) = std::io::stdin().read_to_end(&mut buf) {
         eprintln!("error: failed to read stdin: {e}");
         return ExitCode::from(2);
     }
-    let out = match zhfmt::format(&buf) {
+    let fopts = FormatOptions {
+        whitelist: (!config.whitelist.is_empty()).then_some(&config.whitelist),
+    };
+    let out = match zhfmt::format_with(&buf, fopts) {
         Some(out) => out,
         None => buf,
     };

@@ -14,8 +14,17 @@ pub mod config;
 mod engine;
 #[cfg(feature = "bin")]
 pub mod process;
+pub mod whitelist;
 
-pub use engine::format;
+pub use engine::{format, format_with};
+
+/// Engine options controlling the spacing transform.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FormatOptions<'a> {
+    /// Character pairs between which no space is ever inserted; see
+    /// [`whitelist::Whitelist`].
+    pub whitelist: Option<&'a whitelist::Whitelist>,
+}
 
 /// Format a string, borrowing when no change is needed.
 #[must_use]

@@ -66,6 +66,7 @@ prettier-plugin-zhfmt 不带有 SIMD 实现，如果有条件使用二进制则�
   "extensions": ["md", "markdown", "mdx", "txt", "rst"],
   "include": ["docs/*.adoc"],
   "exclude": ["node_modules/", "target/"],
+  "whitelist": ["B站", "3D"],
   "jobs": 0
 }
 ```
@@ -73,6 +74,7 @@ prettier-plugin-zhfmt 不带有 SIMD 实现，如果有条件使用二进制则�
 - `extensions`：要处理的扩展名白名单（不带点），整体覆盖默认值
 - `include`：额外的 glob 白名单，命中后即使扩展名不匹配也会处理
 - `exclude`：glob 黑名单，相对路径匹配
+- `whitelist`：分词白名单，每条恰好两个字符，表示这两个字符之间不插入空格（如 `"B站"` 保持 `B站` 不加空格）
 - `jobs`：处理线程数，0 或 null 为自动
 
 ## 算法简述

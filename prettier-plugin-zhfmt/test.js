@@ -89,6 +89,20 @@ test("unknown extensions infer the zhfmt parser", async () => {
   assert.equal(await fmt("中文abc", { filepath: "notes.rst" }), "中文 abc");
 });
 
+test("whitelist keeps pairs unspaced", async () => {
+  assert.equal(
+    await fmt("B站和3D建模", { parser: "zhfmt", zhfmtWhitelist: ["B站", "3D"] }),
+    "B站和 3D 建模",
+  );
+  // Also through the wrapped markdown parser.
+  assert.equal(
+    await fmt("B站test", { filepath: "a.md", zhfmtWhitelist: ["B站"] }),
+    "B站 test\n",
+  );
+  // No whitelist: default spacing applies.
+  assert.equal(await fmt("B站test", { parser: "zhfmt" }), "B 站 test");
+});
+
 test("check reports files needing spacing", async () => {
   assert.equal(await prettier.check("中文abc", withPlugin({ parser: "zhfmt" })), false);
   assert.equal(await prettier.check("中文 abc", withPlugin({ parser: "zhfmt" })), true);

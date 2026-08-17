@@ -66,6 +66,7 @@ Lookup order: walk up from the current directory for `zhfmt.json` or `.zhfmt.jso
   "extensions": ["md", "markdown", "mdx", "txt", "rst"],
   "include": ["docs/*.adoc"],
   "exclude": ["node_modules/", "target/"],
+  "whitelist": ["B站", "3D"],
   "jobs": 0
 }
 ```
@@ -73,6 +74,7 @@ Lookup order: walk up from the current directory for `zhfmt.json` or `.zhfmt.jso
 - `extensions`: whitelist of extensions to process (no dot), overrides the defaults entirely
 - `include`: extra glob whitelist; matched files are processed even if the extension does not match
 - `exclude`: glob blacklist, matched against relative paths
+- `whitelist`: spacing whitelist; each entry is exactly two characters, and no space is inserted between that pair (e.g. `"B站"` keeps `B站` unspaced)
 - `jobs`: number of worker threads; 0 or null for automatic
 
 ## Dev

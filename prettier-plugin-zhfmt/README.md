@@ -39,6 +39,15 @@ pnpm add -D prettier-plugin-zhfmt
 
 - 只插入单个空格，从不删除任何内容；幂等。
 - 代码块、inline code、链接 URL、HTML 标签内部不加空格。
+- `zhfmtWhitelist` 选项可指定分词白名单：每条恰好两个字符，表示这两个字符之间不插入空格（如 `"B站"` 保持 `B站` 不加空格）：
+
+```json
+{
+  "plugins": ["prettier-plugin-zhfmt"],
+  "zhfmtWhitelist": ["B站", "3D"]
+}
+```
+
 - 详见 [zhfmt 引擎边界规则](https://github.com/lxl66566/zhfmt#算法简述)。
 
 ## License

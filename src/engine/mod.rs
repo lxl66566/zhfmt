@@ -57,7 +57,10 @@ mod boundary;
 
 use memchr::memchr;
 
-use crate::classify::{Class, classify_at};
+use crate::{
+    FormatOptions,
+    classify::{Class, classify_at},
+};
 
 mod scan;
 
@@ -72,7 +75,14 @@ use scan::{Scan, find_ascii, find_wake};
 /// Format `input`, returning `None` when no change is needed.
 #[must_use]
 pub fn format(input: &[u8]) -> Option<Vec<u8>> {
-    Formatter::new(input).run()
+    format_with(input, FormatOptions::default())
+}
+
+/// Format `input` with the given options, returning `None` when no change is
+/// needed.
+#[must_use]
+pub fn format_with(input: &[u8], opts: FormatOptions<'_>) -> Option<Vec<u8>> {
+    Formatter::new(input, opts).run()
 }
 
 /// Which side of an emphasis run a boundary space belongs to; see
@@ -89,6 +99,9 @@ enum RunRole {
 
 struct Formatter<'a> {
     input: &'a [u8],
+    /// Engine options (whitelist); `FormatOptions` is `Copy`, so this is a
+    /// value copy of the caller's options.
+    opts: FormatOptions<'a>,
     /// Scan position.
     pos: usize,
     /// Output buffer, allocated lazily at the first insertion.
@@ -112,9 +125,10 @@ struct Formatter<'a> {
 }
 
 impl<'a> Formatter<'a> {
-    fn new(input: &'a [u8]) -> Self {
+    fn new(input: &'a [u8], opts: FormatOptions<'a>) -> Self {
         Self {
             input,
+            opts,
             pos: 0,
             out: None,
             last: 0,
@@ -168,8 +182,21 @@ impl<'a> Formatter<'a> {
 
     /// Insert a space at `at` (before the char at that position), flushing the
     /// pending input up to `at` to the output buffer.
+    ///
+    /// A whitelisted seam vetoes the insertion *before* anything is flushed
+    /// or allocated: `last` stays put, so the vetoed bytes are still part of
+    /// a later flush. Vetoes are per-insertion decisions, so a later handler
+    /// re-checking the same seam (the double-insert guards in the handlers)
+    /// is vetoed again — no state is left inconsistent.
     fn insert_space(&mut self, at: usize) {
         debug_assert!(at >= self.last);
+        if self
+            .opts
+            .whitelist
+            .is_some_and(|w| w.vetoes_at(self.input, at))
+        {
+            return;
+        }
         let out = self.out.get_or_insert_with(|| fresh_out(self.input.len()));
         out.extend_from_slice(&self.input[self.last..at]);
         out.push(b' ');
@@ -279,7 +306,7 @@ impl<'a> Formatter<'a> {
     /// flushing pending bytes. Interior text of wrapper constructs
     /// (emphasis, HTML comments) is itself prose and gets formatted.
     fn splice_formatted(&mut self, range: std::ops::Range<usize>) {
-        if let Some(inner) = format(&self.input[range.clone()]) {
+        if let Some(inner) = format_with(&self.input[range.clone()], self.opts) {
             let out = self.out.get_or_insert_with(|| fresh_out(self.input.len()));
             out.extend_from_slice(&self.input[self.last..range.start]);
             out.extend_from_slice(&inner);

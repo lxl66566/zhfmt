@@ -39,6 +39,15 @@ For files you don't want Prettier to re-layout — only add spacing — use the 
 
 - Only inserts single spaces, never deletes anything; idempotent.
 - No spacing inside code blocks, inline code, link URLs, or HTML tags.
+- The `zhfmtWhitelist` option configures a spacing whitelist: each entry is exactly two characters, and no space is inserted between that pair (e.g. `"B站"` keeps `B站` unspaced):
+
+```json
+{
+  "plugins": ["prettier-plugin-zhfmt"],
+  "zhfmtWhitelist": ["B站", "3D"]
+}
+```
+
 - See the [zhfmt engine boundary rules](https://github.com/lxl66566/zhfmt#algorithm-overview) for details.
 
 ## License

@@ -1,7 +1,30 @@
 use super::*;
+use crate::whitelist::Whitelist;
 
 fn fmt(s: &str) -> String {
     match format(s.as_bytes()) {
+        Some(out) => String::from_utf8(out).unwrap(),
+        None => s.to_string(),
+    }
+}
+
+/// Format with a whitelist built from 2-char string pairs.
+fn fmt_with(s: &str, pairs: &[&str]) -> String {
+    let w = Whitelist::new(
+        pairs
+            .iter()
+            .map(|p| {
+                let mut chars = p.chars();
+                let (l, r) = (chars.next().unwrap(), chars.next().unwrap());
+                assert_eq!(chars.next(), None, "pair {p:?} must be 2 chars");
+                (l as u32, r as u32)
+            })
+            .collect(),
+    );
+    let opts = FormatOptions {
+        whitelist: Some(&w),
+    };
+    match format_with(s.as_bytes(), opts) {
         Some(out) => String::from_utf8(out).unwrap(),
         None => s.to_string(),
     }
@@ -522,4 +545,47 @@ fn pathological_emphasis_input_stays_fast() {
     // builds while still being painful without the window.
     let input = "*a ".repeat(10_000);
     unchanged!(&input);
+}
+
+#[test]
+fn whitelist_blocks_exact_pairs() {
+    // The default engine inserts a space; the whitelist vetoes it.
+    changed!("B站", "B 站");
+    assert_eq!(fmt_with("B站", &["B站"]), "B站");
+    // Direction matters: `站B` is a different seam.
+    assert_eq!(fmt_with("站B", &["B站"]), "站 B");
+    // Only the listed seam is vetoed; other crossings are unaffected.
+    assert_eq!(fmt_with("中文English", &["中E"]), "中文 English");
+    assert_eq!(fmt_with("中文English", &["文E"]), "中文English");
+    // Multibyte on both sides can never cross (Latin is ASCII), but a pair
+    // may still be listed harmlessly.
+    assert_eq!(fmt_with("中文English", &["中英"]), "中文 English");
+}
+
+#[test]
+fn whitelist_applies_to_construct_boundaries() {
+    // Uniform application: code span edges are vetoed like direct seams.
+    assert_eq!(fmt_with("中`code`b", &["中`"]), "中`code`b");
+    // The right edge (a direct CJK seam) is unaffected.
+    assert_eq!(fmt_with("中`code`中", &["中`"]), "中`code` 中");
+    // Unlisted pairs keep the default behavior.
+    assert_eq!(fmt_with("中`code`b", &[]), "中 `code`b");
+    // Emphasis: the outer space before the markers is vetoed, the interior
+    // recursion (a separate format_with call) still sees the whitelist.
+    assert_eq!(fmt_with("中文*ab中*结尾", &["文*"]), "中文*ab 中*结尾");
+    // Soft markers in between mean the seam is not a direct pair: `*a` here
+    // is looked through, so `(文, a)` never matches even if listed.
+    assert_eq!(fmt_with("中文*a*b", &["文a"]), "中文 *a*b");
+}
+
+#[test]
+fn whitelist_keeps_idempotency() {
+    for (input, pairs) in [
+        ("B站", vec!["B站"]),
+        ("中`code` 中", vec!["中`"]),
+        ("中文*ab 中*结尾", vec!["文*"]),
+    ] {
+        let once = fmt_with(input, &pairs);
+        assert_eq!(fmt_with(&once, &pairs), once, "{input:?}");
+    }
 }
