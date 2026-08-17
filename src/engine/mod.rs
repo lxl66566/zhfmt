@@ -63,9 +63,9 @@ mod scan;
 
 use boundary::{
     MAX_EMPHASIS_SPAN, crosses, find_closing_run, find_code_span, find_comment_end, find_url_end,
-    front_matter_end, is_indented_code_line, is_space_byte, last_content_class, latin_after_punct,
-    lookback_class, peek_forward_class, prev_line_blank, prose_first_class, prose_last_class,
-    run_len, scan_html_tag, scan_indented_code,
+    front_matter_end, is_indented_code_line, is_space_byte, last_content_class, lookback_class,
+    peek_forward_class, prev_line_blank, prose_first_class, prose_last_class, run_len,
+    scan_html_tag, scan_indented_code,
 };
 use scan::{Scan, find_ascii, find_wake};
 
@@ -226,14 +226,8 @@ impl<'a> Formatter<'a> {
                 self.insert_space(start);
             }
         }
-        if last_class == Class::Cjk {
-            if self.input.get(end).is_some_and(u8::is_ascii_alphanumeric) {
-                self.insert_space(end);
-            } else if let Some(at) = latin_after_punct(self.input, end) {
-                // `中文,english`: the comma attaches to the preceding word;
-                // the boundary space goes after the punctuation run.
-                self.insert_space(at);
-            }
+        if last_class == Class::Cjk && self.input.get(end).is_some_and(u8::is_ascii_alphanumeric) {
+            self.insert_space(end);
         }
         self.prev = Some(last_class);
         self.pos = end;
