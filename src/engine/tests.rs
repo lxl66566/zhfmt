@@ -101,17 +101,20 @@ fn halfwidth_punctuation_blocks() {
 #[test]
 fn inline_code() {
     changed!("在这个`myfunc`函数内", "在这个 `myfunc` 函数内");
-    unchanged!("在这个`中文`函数内");
-    // Boundary is decided by the adjacent interior char: left edge sees 中
-    // (CJK) so no space; right edge sees `d` (Latin) so a space is inserted.
-    changed!("调用`中文method`结果", "调用`中文method` 结果");
+    // A span is a monolithic code unit: its edges cross with CJK regardless
+    // of the interior content (symbols, CJK, ...).
+    changed!("在这个`中文`函数内", "在这个 `中文` 函数内");
+    changed!("命令`./aaa`", "命令 `./aaa`");
+    changed!("使用`--flag`参数", "使用 `--flag` 参数");
+    changed!("路径`/usr/bin`下", "路径 `/usr/bin` 下");
+    changed!("调用`中文method`结果", "调用 `中文method` 结果");
     // Interior of code spans is never touched.
     unchanged!("`中文code中文`");
     changed!("使用``code`with`tick``完成", "使用 ``code`with`tick`` 完成");
     // Unclosed backtick is treated as a literal character.
     unchanged!("中文`code");
     unchanged!("a ` b");
-    // Empty span: nothing to decide, stay conservative.
+    // Unclosed run between CJK: transparent, nothing to decide.
     unchanged!("中文``中文");
 }
 
@@ -146,7 +149,9 @@ fn links() {
     // Inline links keep their text-decided boundaries.
     changed!("中[中文](url)b", "中[中文](url) b");
     changed!("中**中文**b", "中**中文** b");
-    changed!("中`中文`b", "中`中文` b");
+    // The span acts Latin-like as a whole: no space towards a Latin
+    // neighbor even when the interior is CJK.
+    changed!("中`中文`b", "中 `中文`b");
     // Malformed: space inside parens -> not a URL, treated as plain text;
     // the `)` is opaque and blocks the boundary.
     unchanged!("[a](b c)中文");
@@ -307,7 +312,7 @@ fn markdown_documents() {
     changed!("- 列表item1\n- 列表item2", "- 列表 item1\n- 列表 item2");
     // Hard-coded strings in md code spans are protected.
     unchanged!("配置项 `name中文` 保持原样");
-    changed!("配置项`name中文`保持", "配置项 `name中文`保持");
+    changed!("配置项`name中文`保持", "配置项 `name中文` 保持");
 }
 
 #[test]
@@ -520,22 +525,24 @@ fn emphasis_never_pairs_into_code_spans() {
 
 #[test]
 fn emphasis_wrapping_code_spans() {
-    // Emphasis legitimately containing a code span: the wrapper's boundary
-    // is decided by the span's interior content.
+    // Emphasis legitimately containing a code span: the span is a
+    // monolithic Latin-like unit at the wrapper's boundary.
     changed!(
         "一阶段：*`ab*c`*匹配`aabbbbc`。",
         "一阶段：*`ab*c`* 匹配 `aabbbbc`。"
     );
     changed!("中文**`code`x**结尾", "中文 **`code`x** 结尾");
-    changed!("中**`代码`文**尾", "中**`代码`文**尾");
+    // The interior recursion applies the same rule: the span is spaced from
+    // the CJK char following it inside the emphasis.
+    changed!("中**`代码`文**尾", "中 **`代码` 文**尾");
 }
 
 #[test]
 fn link_text_with_code_spans() {
-    // Code spans inside link text decide the link's boundary by their
-    // interior; the span itself is never touched.
+    // Code spans inside link text act as Latin-like units; the span itself
+    // is never touched.
     changed!("见[`c`](u)文", "见 [`c`](u) 文");
-    unchanged!("见[`中文`](u)文");
+    changed!("见[`中文`](u)文", "见 [`中文`](u) 文");
 }
 
 #[test]

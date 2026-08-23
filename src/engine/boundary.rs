@@ -9,9 +9,9 @@
 //! - backward: [`lookback_class`] / [`last_content_class`]
 //!
 //! For *prose* interiors (emphasis, link text) the span-aware variants
-//! [`prose_first_class`] / [`prose_last_class`] additionally look through
-//! code spans (paired spans decide by their interior, unpaired backticks
-//! are transparent).
+//! [`prose_first_class`] / [`prose_last_class`] additionally treat paired
+//! code spans as monolithic Latin-like units (unpaired backticks are
+//! transparent).
 //!
 //! The structural scanners ([`scan_html_tag`], [`find_url_end`],
 //! [`find_closing_run`]) measure how far an opaque or skipped construct
@@ -160,44 +160,20 @@ pub(super) fn lookback_class(
     prev
 }
 
-/// Class of the last content char in `text` (skipping `Soft` and whitespace),
-/// searching backwards from the end. Used for code spans and link texts.
-pub(super) fn last_content_class(text: &[u8]) -> Option<Class> {
-    let mut j = text.len();
-    let prev = None;
-    while j > 0 {
-        let b = text[j - 1];
-        if b < 0x80 {
-            match ascii_class(b) {
-                Class::Soft | Class::Space => j -= 1,
-                Class::Hard => return prev,
-                c => return Some(c),
-            }
-        } else {
-            let s = char_start_before(text, j);
-            match classify_at(text, s).0 {
-                Class::Soft => j = s,
-                c => return Some(c),
-            }
-        }
-    }
-    prev
-}
-
 /// Class of the first content char in *prose* `text` (emphasis or
 /// link-text interior): like [`peek_forward_class`], but code-span aware —
-/// a paired span decides the boundary by its interior content (the same
-/// rule a bare span follows in the main scan), and an unpaired backtick
-/// run is transparent.
+/// a paired span is a monolithic code unit and acts Latin-like at its edge
+/// (the same rule a bare span follows in the main scan); an unpaired
+/// backtick run is transparent.
 pub(super) fn prose_first_class(text: &[u8]) -> Option<Class> {
     let mut i = 0;
     while i < text.len() {
         if text[i] == b'`' {
             let k = run_len(text, i, b'`');
-            if let Some(close) = find_code_span(text, i, k) {
-                // The interior is code: its raw first content char decides,
-                // without looking through it any further.
-                return peek_forward_class(&text[i + k..close], 0);
+            if find_code_span(text, i, k).is_some() {
+                // The span is one code unit: its edge crosses with CJK
+                // regardless of the interior content.
+                return Some(Class::Latin);
             }
             i += k;
         } else {
@@ -212,9 +188,10 @@ pub(super) fn prose_first_class(text: &[u8]) -> Option<Class> {
 }
 
 /// Class of the last content char in *prose* `text` (emphasis or
-/// link-text interior): like [`last_content_class`], but code-span aware.
+/// link-text interior): code-span aware like [`prose_first_class`].
 /// Replays the main scanner's span pairing left to right so paired spans
-/// decide by their interior and unpaired backtick runs stay transparent.
+/// act as monolithic Latin-like units and unpaired backtick runs stay
+/// transparent.
 pub(super) fn prose_last_class(text: &[u8]) -> Option<Class> {
     let mut last = None;
     let mut i = 0;
@@ -223,7 +200,7 @@ pub(super) fn prose_last_class(text: &[u8]) -> Option<Class> {
             let k = run_len(text, i, b'`');
             match find_code_span(text, i, k) {
                 Some(close) => {
-                    last = last_content_class(&text[i + k..close]);
+                    last = Some(Class::Latin);
                     i = close + k;
                 },
                 None => i += k,

@@ -28,8 +28,10 @@
 //!
 //! Structural constructs recognized by the scanner:
 //!
-//! - Code spans (`` `...` ``) and link URLs (`[text](url)`) are skipped over; the boundary of a
-//!   code span / link is decided by the first/last *content* character inside it.
+//! - Code spans (`` `...` ``) and link URLs (`[text](url)`) are skipped over. A paired code span is
+//!   a monolithic code unit: like a Latin word, it is spaced from adjacent CJK regardless of its
+//!   interior content (`命令`./aaa`` becomes `命令 `./aaa``). A link's boundary is decided by the
+//!   first/last *content* character of its text.
 //! - Fenced code blocks are skipped as one big code span via backtick-run pairing; indented code
 //!   blocks (a line indented by 4+ spaces or a tab, following a blank line) and YAML front matter
 //!   are skipped verbatim — their content is hardcode, never prose.
@@ -66,9 +68,9 @@ mod scan;
 
 use boundary::{
     MAX_EMPHASIS_SPAN, crosses, find_closing_run, find_code_span, find_comment_end, find_url_end,
-    front_matter_end, is_indented_code_line, is_space_byte, last_content_class, lookback_class,
-    peek_forward_class, prev_line_blank, prose_first_class, prose_last_class, run_len,
-    scan_html_tag, scan_indented_code,
+    front_matter_end, is_indented_code_line, is_space_byte, lookback_class, peek_forward_class,
+    prev_line_blank, prose_first_class, prose_last_class, run_len, scan_html_tag,
+    scan_indented_code,
 };
 use scan::{Scan, find_ascii, find_wake};
 
@@ -203,11 +205,11 @@ impl<'a> Formatter<'a> {
         self.last = at;
     }
 
-    /// Right boundary of a content-wrapped construct (link text, code span,
-    /// emphasis) against a Latin neighbor. The construct handlers set `prev`
-    /// from the interior and jump past the closer, but a following ASCII
-    /// Latin char never wakes the scanner — without this check the crossing
-    /// would go unnoticed (`中[中文]b` would stay unspaced).
+    /// Right boundary of a content-wrapped construct (link text, emphasis)
+    /// against a Latin neighbor. The construct handlers set `prev` from the
+    /// interior and jump past the closer, but a following ASCII Latin char
+    /// never wakes the scanner — without this check the crossing would go
+    /// unnoticed (`中[中文]b` would stay unspaced).
     fn insert_right_boundary(&mut self) {
         if matches!(self.prev, Some(Class::Cjk))
             && self.pos > self.last
@@ -288,14 +290,18 @@ impl<'a> Formatter<'a> {
         // Find the closing run of exactly the same length.
         match find_code_span(self.input, self.pos, n) {
             Some(c) => {
-                let interior = &self.input[self.pos + n..c];
-                let first = peek_forward_class(interior, 0);
-                if crosses(self.prev, first) {
+                // A paired span (inline code, or a fenced block) is a
+                // monolithic code unit: rendered as one visually distinct
+                // chip, it is spaced from adjacent CJK whatever its interior
+                // starts or ends with (`命令`./aaa`` -> `命令 `./aaa``). The
+                // interior itself is never inspected or modified.
+                if matches!(self.prev, Some(Class::Cjk)) {
                     self.insert_space(self.pos);
                 }
-                self.prev = last_content_class(interior);
+                // The right edge crosses via this virtual Latin `prev` when
+                // the next content char is CJK (see `on_multibyte`).
+                self.prev = Some(Class::Latin);
                 self.pos = c + n;
-                self.insert_right_boundary();
             },
             // Unclosed: treat as transparent, keep `prev`.
             None => self.pos += n,
