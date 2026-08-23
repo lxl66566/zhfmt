@@ -43,11 +43,17 @@
 //!   exists within a bounded window (see [`MAX_EMPHASIS_SPAN`]): the outer boundary is decided by
 //!   the interior's content and spaces are only ever placed *outside* the markers, so `CG**鉴赏**`
 //!   becomes `CG **鉴赏**`, never `CG** 鉴赏**`. The closer search skips code spans and HTML
-//!   tags/comments atomically (a `*` inside them is code or markup, never a delimiter), so a stray
-//!   prose `*` can never pair into a span and desync the backtick pairing. An opener whose closer
-//!   lies beyond the window is paired with it optimistically (pending opener), keeping spaces
-//!   outside the markers as well; any other unpaired run is literal text and its boundary hugs the
-//!   CJK side.
+//!   tags/comments atomically (a `*` inside them is code or markup, never an emphasis delimiter),
+//!   so a stray prose `*` can never pair into a span and desync the backtick pairing. An opener
+//!   whose closer lies beyond the window is paired with it optimistically (pending opener), keeping
+//!   spaces outside the markers as well; any other unpaired run is literal text and its boundary
+//!   hugs the CJK side.
+//! - Backslash-escaped punctuation (`` \` ``, `\*`, `\[`, `\<`, …) is literal text (CommonMark
+//!   §2.3): it never opens or closes any construct, renders as a plain symbol ([`Class::Other`])
+//!   and blocks boundaries. This keeps escaped backticks from swallowing prose into fake code spans
+//!   and desyncing the pairing of real ones (which would expose their interiors to formatting). The
+//!   one escape-blind spot, exactly like CommonMark, is the code-span *closer* search: `` `a\`b` ``
+//!   ends at the second backtick.
 //!
 //! Module layout: [`scan`] locates the next interesting byte, [`boundary`]
 //! decides effective classes and construct extents, and this module holds the
@@ -68,9 +74,9 @@ mod scan;
 
 use boundary::{
     MAX_EMPHASIS_SPAN, crosses, find_closing_run, find_code_span, find_comment_end, find_url_end,
-    front_matter_end, is_indented_code_line, is_space_byte, lookback_class, peek_forward_class,
-    prev_line_blank, prose_first_class, prose_last_class, run_len, scan_html_tag,
-    scan_indented_code,
+    front_matter_end, is_escaped, is_indented_code_line, is_space_byte, lookback_class,
+    peek_forward_class, prev_line_blank, prose_first_class, prose_last_class, run_len,
+    scan_html_tag, scan_indented_code,
 };
 use scan::{Scan, find_ascii, find_wake};
 
@@ -286,6 +292,13 @@ impl<'a> Formatter<'a> {
     /// A backtick run: try to match a code span. Unclosed runs are treated as
     /// transparent delimiters.
     fn on_backtick(&mut self) {
+        if is_escaped(self.input, self.pos) {
+            // An escaped backtick is a literal character (CommonMark
+            // §2.3): it must not open a span, or it would swallow the
+            // following prose and desync the pairing of real spans.
+            self.on_escaped_literal();
+            return;
+        }
         let n = run_len(self.input, self.pos, b'`');
         // Find the closing run of exactly the same length.
         match find_code_span(self.input, self.pos, n) {
@@ -320,6 +333,17 @@ impl<'a> Formatter<'a> {
         }
     }
 
+    /// Consume one backslash-escaped delimiter as a literal symbol byte:
+    /// it renders as plain punctuation (`\`` → `` ` ``), so it is
+    /// `Class::Other` — visible content that blocks boundaries. Only the
+    /// first byte of a longer run is escaped (`\` + `**` is a literal
+    /// backtick then a real delimiter run); the remainder re-wakes in
+    /// the main loop and is handled on its own.
+    fn on_escaped_literal(&mut self) {
+        self.prev = Some(Class::Other);
+        self.pos += 1;
+    }
+
     /// `<`: an HTML tag / comment / processing instruction is an opaque atom
     /// — its interior (including attribute values such as `title="中文"` or
     /// Vue slot names like `<template #廃村少女2>`) is never formatted, and
@@ -328,6 +352,11 @@ impl<'a> Formatter<'a> {
     /// itself still blocks boundaries on both sides. A `<` that does not
     /// start a valid tag is a literal char and blocks the boundary as well.
     fn on_tag(&mut self) {
+        if is_escaped(self.input, self.pos) {
+            // `\<` is a literal char, never a tag opener.
+            self.on_escaped_literal();
+            return;
+        }
         if self.input[self.pos..].starts_with(b"<!--")
             && let Some(end) = find_comment_end(self.input, self.pos)
         {
@@ -353,6 +382,13 @@ impl<'a> Formatter<'a> {
     /// - Otherwise the run is literal text: the boundary hugs the CJK side, as if the markers
     ///   weren't there.
     fn on_emphasis(&mut self) {
+        if is_escaped(self.input, self.pos) {
+            // An escaped `*`/`~` is a literal char: it must neither open
+            // nor close an emphasis pair (`中文\*abc\*x` used to pair the
+            // escapes and space the literal asterisks' interior).
+            self.on_escaped_literal();
+            return;
+        }
         let len = self.input.len();
         let c = self.input[self.pos];
         let n = run_len(self.input, self.pos, c);
@@ -499,6 +535,11 @@ impl<'a> Formatter<'a> {
     /// boundary. Everything else bracketed is an opaque atom instead — see
     /// below — and never creates a boundary on either side.
     fn on_bracket_open(&mut self) {
+        if is_escaped(self.input, self.pos) {
+            // `\[` is a literal char: no link text, no opaque atom.
+            self.on_escaped_literal();
+            return;
+        }
         let len = self.input.len();
         if self.pos + 1 < len
             && self.input[self.pos + 1] == b'^'
@@ -536,6 +577,11 @@ impl<'a> Formatter<'a> {
     /// neither gets formatted nor influences the boundary; the link text's
     /// last content char becomes the effective previous char.
     fn on_bracket_close(&mut self) {
+        if is_escaped(self.input, self.pos) {
+            // `\]` is a literal char: it never closes a link.
+            self.on_escaped_literal();
+            return;
+        }
         let len = self.input.len();
         if self.pos + 1 < len && self.input[self.pos + 1] == b'(' {
             if let Some(end) = find_url_end(self.input, self.pos + 2) {

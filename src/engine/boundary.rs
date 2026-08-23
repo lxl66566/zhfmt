@@ -17,6 +17,11 @@
 //! [`find_closing_run`]) measure how far an opaque or skipped construct
 //! extends, which the [`Formatter`](super::Formatter) event handlers need to
 //! advance over it without inspecting its interior.
+//!
+//! Backslash escapes (CommonMark §2.3, [`is_escaped`]) are honored on every
+//! *opener* side: an escaped delimiter is a literal char that never starts a
+//! construct. The code-span closer search ([`find_code_span`]) is deliberately
+//! escape-blind, mirroring CommonMark.
 // Hot-path helpers are intentionally force-inlined.
 #![allow(clippy::inline_always)]
 
@@ -31,6 +36,29 @@ pub(super) const fn crosses(left: Option<Class>, right: Option<Class>) -> bool {
         (left, right),
         (Some(Class::Latin), Some(Class::Cjk)) | (Some(Class::Cjk), Some(Class::Latin))
     )
+}
+
+/// Whether the byte at `pos` is backslash-escaped: preceded by an odd
+/// number of consecutive backslashes (CommonMark §2.3 — `\\*` is a
+/// literal backslash followed by a real delimiter, so parity matters).
+/// An escaped ASCII punctuation char is a *literal* character: it never
+/// opens or closes a structural construct, and renders as a plain
+/// symbol. The one exception is the code-span *closer* search
+/// ([`find_code_span`]), which stays escape-blind exactly like
+/// CommonMark: `` `a\`b` `` ends at the second backtick, with the
+/// backslash kept verbatim in the span content.
+#[inline]
+pub(super) fn is_escaped(input: &[u8], pos: usize) -> bool {
+    if pos == 0 || input[pos - 1] != b'\\' {
+        return false;
+    }
+    let mut j = pos - 1;
+    let mut odd = true;
+    while j > 0 && input[j - 1] == b'\\' {
+        j -= 1;
+        odd = !odd;
+    }
+    odd
 }
 
 /// Class of the first *content* char at or after `from`, looking through
@@ -169,6 +197,10 @@ pub(super) fn prose_first_class(text: &[u8]) -> Option<Class> {
     let mut i = 0;
     while i < text.len() {
         if text[i] == b'`' {
+            if is_escaped(text, i) {
+                // Escaped: a literal backtick, rendered as a symbol.
+                return Some(Class::Other);
+            }
             let k = run_len(text, i, b'`');
             if find_code_span(text, i, k).is_some() {
                 // The span is one code unit: its edge crosses with CJK
@@ -197,6 +229,12 @@ pub(super) fn prose_last_class(text: &[u8]) -> Option<Class> {
     let mut i = 0;
     while i < text.len() {
         if text[i] == b'`' {
+            if is_escaped(text, i) {
+                // Escaped: a literal backtick, rendered as a symbol.
+                last = Some(Class::Other);
+                i += 1;
+                continue;
+            }
             let k = run_len(text, i, b'`');
             match find_code_span(text, i, k) {
                 Some(close) => {
@@ -280,6 +318,13 @@ pub(super) fn find_closing_run(
     let mut scan = from;
     while let Some(off) = memchr3(b'`', b'<', c, input.get(scan..until).unwrap_or(&[])) {
         let start = scan + off;
+        if is_escaped(input, start) {
+            // An escaped delimiter is a literal char: it opens nothing,
+            // so the atomic skips below must not jump over it (a `\*` or
+            // `\`` is prose, and a real closer may follow right behind).
+            scan = start + 1;
+            continue;
+        }
         match input[start] {
             b'`' => {
                 let k = run_len(input, start, b'`');
@@ -373,15 +418,17 @@ fn scan_tag_body(input: &[u8], mut i: usize) -> Option<usize> {
 }
 
 /// Find the `)` closing a link URL starting at `from` (just after `(`).
-/// Tracks one level of nested parens (Wikipedia-style URLs). Bails out on
-/// whitespace or end of input (malformed / not really a URL).
+/// Tracks one level of nested parens (Wikipedia-style URLs); escaped
+/// parens are literals per CommonMark and never affect the depth or
+/// close the destination. Bails out on whitespace or end of input
+/// (malformed / not really a URL).
 pub(super) fn find_url_end(input: &[u8], from: usize) -> Option<usize> {
     let mut depth = 1usize;
     let mut i = from;
     while i < input.len() {
         match input[i] {
-            b'(' => depth += 1,
-            b')' => {
+            b'(' if !is_escaped(input, i) => depth += 1,
+            b')' if !is_escaped(input, i) => {
                 depth -= 1;
                 if depth == 0 {
                     return Some(i);

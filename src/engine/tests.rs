@@ -119,6 +119,83 @@ fn inline_code() {
 }
 
 #[test]
+fn backslash_escapes() {
+    // An escaped backtick must never open a code span: it would swallow
+    // the following prose into a fake span and steal the real span's
+    // opener as its closer, exposing the real interior to formatting
+    // (a space used to land *inside* `打印输出`).
+    changed!(
+        "反引号\\`是转义，代码`打印输出`结束",
+        "反引号\\`是转义，代码 `打印输出` 结束"
+    );
+    // Even backslash run: the backslash is itself escaped, so the
+    // backtick is a real opener.
+    changed!("中文\\\\`x`中文", "中文\\\\`x` 中文");
+    // The closer search stays escape-blind, exactly like CommonMark:
+    // `a\` closes at the second backtick.
+    changed!("中文`a\\`b`中文", "中文 `a\\`b` 中文");
+    // Escaped backticks render as literal symbols and block boundaries.
+    unchanged!("中文\\`中文");
+    unchanged!("中文\\`x\\`中文");
+    // Escaped asterisks/tilde are literal: never paired, never spaced.
+    unchanged!("中文\\*字面星号\\*中文");
+    unchanged!("\\*中文\\*");
+    unchanged!("中文\\~~删除\\~~中文");
+    // An escaped delimiter cannot steal a real emphasis closer: the
+    // wrapper is `*abc\*x*` (renders as `abc*x`), spaces outside only.
+    changed!("中文*abc\\*x*尾", "中文 *abc\\*x* 尾");
+    // A literal marker's boundary hugs the CJK side.
+    changed!("中文\\*abc*中文", "中文\\*abc* 中文");
+    // Escaped brackets are literal chars: no link, no opaque atom, and
+    // no pairing desync towards later brackets.
+    unchanged!("中文\\[中文\\]english");
+    unchanged!("\\[中文\\](url)");
+    // Escaped `<` is a literal char, never a tag opener.
+    unchanged!("中文\\<div\\>中文");
+    // Escaped parens inside a link destination are literals (CommonMark):
+    // the URL runs to the final `)`.
+    changed!("[link](a\\)b)结束", "[link](a\\)b) 结束");
+    // Prose interiors (emphasis, link text) replay the same pairing: the
+    // escaped backtick is a literal symbol there too, so the real span
+    // inside pairs identically to the main scan.
+    changed!("中文*a\\`b`c`d*中文", "中文 *a\\`b`c`d* 中文");
+    changed!("中文[a\\`b`c`d](u)中文", "中文 [a\\`b`c`d](u) 中文");
+}
+
+#[test]
+fn markdown_table_with_escapes() {
+    // A syntax-tutorial table mixing code spans, emphasis samples and
+    // escaped backticks/asterisks. The escaped delimiters must not
+    // desync the backtick pairing across cells (which used to expose
+    // span interiors to prose formatting), and table pipes keep
+    // blocking the cell boundaries.
+    let table = "\
+|样式|样例|效果|
+| :--: | :--: | :--: |
+|斜体|`*斜体*`|*斜体*|
+|粗体|`**粗体**`|**粗体**|
+|删除线|`~~删除~~`|~~删除~~|
+|标记|\\`等宽标记\\`|`等宽标记`|
+|链接|`[百度](https://www.baidu.com/)`|[百度](https://www.baidu.com/)|
+|图片|`![加载失败时显示此处文字](https://s2.loli.net/2023/03/20/bn4zcdBPgXKq5DH.jpg)`|![加载失败时显示此处文字](https://s2.loli.net/2023/03/20/bn4zcdBPgXKq5DH.jpg)|
+|转义|`\\*不是斜体\\*`|\\*不是斜体\\*|
+";
+    unchanged!(table);
+    // The same table in an already over-spaced state: interiors are
+    // hardcode and the transform is insertive-only, so it stays put.
+    let damaged = "\
+|斜体|`* 斜体 *`|*斜体*|
+|粗体|` **粗体** `|**粗体**|
+|标记|\\` 等宽标记\\`|` 等宽标记 `|
+";
+    unchanged!(damaged);
+    // An odd escaped backtick before real spans used to shift the whole
+    // pairing chain (swallowing prose into a fake span) and space the
+    // emphasis interiors inside the later code spans.
+    unchanged!("前文\\`反例，然后：\n|粗体|`**粗体**`|**粗体**|\n|标记|`等宽标记`|`等宽标记`|");
+}
+
+#[test]
 fn fenced_code_block_untouched() {
     let input = "前文\n```rust\nlet s = \"中文test混排\";\n```\n后文";
     unchanged!(input);
@@ -224,6 +301,9 @@ fn idempotent() {
         "<!-- 注释comment -->后文",
         "负面消息[^1][^2]让我",
         "解法([ref](url))：",
+        "反引号\\`是转义，代码`打印输出`结束",
+        "中文*abc\\*x*尾",
+        "中文\\`中文",
     ];
     for case in cases {
         let once = fmt(case);

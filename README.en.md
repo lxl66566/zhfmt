@@ -8,7 +8,7 @@ High-performance formatter for Chinese documentation: follows the pangu spacing 
 - Fast: SIMD (AVX2/SSE2, runtime detection) + SWAR hybrid scanning + multibyte-run skipping + COW, no regex anywhere; already-formatted files are scanned without allocating a buffer or writing back; files are processed in parallel.
 - Focused: unlike autocorrect, zhfmt does one thing — add spaces — minimizing unexpected changes.
 
-The tool targets markdown documents and handles markdown links, inline HTML, inline code, code blocks, and footnote syntax to avoid unintended edits as much as possible. It can also be used to add spacing to other plain-text formats; it has not been tested on code.
+The tool targets markdown documents and handles markdown links, inline HTML, inline code, code blocks, escape, and footnote syntax to avoid unintended edits as much as possible. It can also be used to add spacing to other plain-text formats; it has not been tested on code.
 
 ## Installation
 
