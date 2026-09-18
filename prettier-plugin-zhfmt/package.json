@@ -14,7 +14,9 @@
   ],
   "scripts": {
     "prepublishOnly": "pnpm --dir .. run build:wasm",
-    "test": "node --test test.js"
+    "test": "node --test test.js",
+    "bench": "node bench3.mjs ./wasm",
+    "diff": "node diff-test.js"
   },
   "keywords": [
     "prettier",

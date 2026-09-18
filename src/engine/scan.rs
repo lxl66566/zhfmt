@@ -9,7 +9,8 @@
 //! Both use a hybrid scheme: the first words are checked with an inline SWAR
 //! test (no call overhead), and longer clean stretches are handed off to a
 //! SIMD continuation selected once per run by [`Scan`] (AVX2 / SSE2 on
-//! x86_64, runtime-detected; SWAR loops elsewhere).
+//! x86_64, runtime-detected; simd128 on wasm32, a compile-time switch since
+//! WASM has no runtime detection; SWAR loops elsewhere).
 //!
 //! Why inline SWAR first: on Windows x64, ymm6-15 / xmm6-15 are callee-saved,
 //! so a SIMD scanner function pays a 4-5 register spill/restore prologue per
@@ -51,10 +52,11 @@ const fn wake_in_word(w: u64) -> bool {
 }
 
 // Long-range scanner continuations: SWAR loops used directly on
-// non-x86_64 architectures. On x86_64 the SSE2 scanners are part of the
+// architectures without a SIMD scanner (and on wasm32 builds without the
+// simd128 target feature). On x86_64 the SSE2 scanners are part of the
 // baseline and always selected (see [`Scan::select`]), so these loops are
 // dead code there.
-#[cfg_attr(target_arch = "x86_64", allow(dead_code))]
+#[cfg_attr(any(target_arch = "x86_64", target_arch = "wasm32"), allow(dead_code))]
 mod scalar {
     use super::{SWAR_HI, is_wake_byte, wake_in_word};
 
@@ -435,6 +437,142 @@ mod x86 {
     }
 }
 
+/// SIMD scanners for wasm32 with the fixed-width `simd128` extension (16
+/// bytes/step).
+///
+/// WASM has no runtime CPU detection, so the scanners are enabled
+/// unconditionally for the wasm32 target via per-function
+/// `#[target_feature(enable = "simd128")]` instead of a crate-wide target
+/// feature: enabling the feature for the whole crate lets LLVM
+/// auto-vectorize unrelated engine loops with v128 code, which measured
+/// ~8% slower end-to-end. Every engine prettier runs in (Node >= 16.4,
+/// V8 >= 9.0) supports the extension; the plugin requires Node >= 18, so
+/// the resulting module's SIMD requirement is safe.
+#[cfg(target_arch = "wasm32")]
+mod wasm {
+    use core::arch::wasm32::{
+        i8x16_bitmask, i8x16_gt, i8x16_swizzle, u8x16_splat, u16x8_shr, v128, v128_and, v128_load,
+        v128_or,
+    };
+
+    use super::is_wake_byte;
+
+    // Same nibble tables as the AVX2 scanner (see the bucket assignment and
+    // exact-match argument there), as single 16-byte tables: wasm `swizzle`
+    // indexes across the whole vector, so no per-lane duplication is needed.
+    #[rustfmt::skip]
+    static WAKE_LO: [u8; 16] = [32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 8, 4, 16, 64, 0];
+    #[rustfmt::skip]
+    static WAKE_HI: [u8; 16] = [1, 0, 2, 4, 0, 24, 32, 64, 0, 0, 0, 0, 0, 0, 0, 0];
+
+    /// Load a 16-byte constant as a vector.
+    ///
+    /// # Safety
+    ///
+    /// Requires the `simd128` target feature for the caller.
+    #[inline]
+    #[target_feature(enable = "simd128")]
+    fn load(k: &[u8; 16]) -> v128 {
+        // SAFETY: a 16-byte read from a 16-byte object is in bounds, and wasm
+        // `v128.load` tolerates unaligned addresses.
+        unsafe { v128_load(k.as_ptr().cast()) }
+    }
+
+    /// Load 16 bytes at `i` from the input; wasm `v128.load` tolerates
+    /// unaligned addresses.
+    ///
+    /// # Safety
+    ///
+    /// `i + 16 <= input.len()`, and the caller has `simd128` enabled.
+    #[inline]
+    #[target_feature(enable = "simd128")]
+    fn load_input(input: &[u8], i: usize) -> v128 {
+        // SAFETY: `i + 16 <= input.len()`, so the 16-byte read is in bounds.
+        unsafe { v128_load(input.as_ptr().add(i).cast()) }
+    }
+
+    /// Find the next wake byte at or after `from`; returns `input.len()` if none.
+    pub fn find_wake(input: &[u8], from: usize) -> usize {
+        // simd128 is supported by every engine prettier runs in (Node >=
+        // 16.4); see the module docs.
+        find_wake_simd128(input, from)
+    }
+
+    /// The simd128 body; a separate fn so `find_wake` stays inlinable as a
+    /// plain call target.
+    #[target_feature(enable = "simd128")]
+    fn find_wake_simd128(input: &[u8], from: usize) -> usize {
+        let len = input.len();
+        let nibble = u8x16_splat(0x0f);
+        let zero = u8x16_splat(0);
+        let wake_lo = load(&WAKE_LO);
+        let wake_hi = load(&WAKE_HI);
+        let mut i = from;
+        while i + 16 <= len {
+            let c = load_input(input, i);
+            // Same scheme as the AVX2 scanner: `swizzle` looks up each byte's
+            // low/high nibble in the tables; non-ASCII bytes (high nibble
+            // 8-15) read 0 from `WAKE_HI` and are merged in below through
+            // their sign bit.
+            let lo = i8x16_swizzle(wake_lo, v128_and(c, nibble));
+            let hi = i8x16_swizzle(wake_hi, hi_nibbles(c, nibble));
+            let hits = v128_and(lo, hi);
+            // Bucket values are <= 64, so a signed `>` 0 turns hits into
+            // 0xFF; OR-ing the chunk itself adds the non-ASCII sign bits,
+            // and a single bitmask extracts both.
+            let m = v128_or(i8x16_gt(hits, zero), c);
+            let mask = i8x16_bitmask(m);
+            if mask != 0 {
+                return i + mask.trailing_zeros() as usize;
+            }
+            i += 16;
+        }
+        while i < len && !is_wake_byte(input[i]) {
+            i += 1;
+        }
+        i
+    }
+
+    /// Extract the high nibble of every byte into the low nibble.
+    #[inline]
+    #[target_feature(enable = "simd128")]
+    fn hi_nibbles(c: v128, nibble: v128) -> v128 {
+        // The 16-bit shift leaks the neighbor's low nibble into the top of
+        // each byte; the mask clears it. `u16x8_shr` is the logical shift
+        // (`i16x8_shr` sign-extends and corrupts non-ASCII lookups).
+        v128_and(u16x8_shr(c, 4), nibble)
+    }
+
+    /// Find the first ASCII byte (`< 0x80`) at or after `from`; `input.len()`
+    /// if none.
+    pub fn find_ascii(input: &[u8], from: usize) -> usize {
+        // simd128 is supported by every engine prettier runs in (Node >=
+        // 16.4); see the module docs.
+        find_ascii_simd128(input, from)
+    }
+
+    /// The simd128 body; a separate fn so `find_ascii` stays inlinable as a
+    /// plain call target.
+    #[target_feature(enable = "simd128")]
+    fn find_ascii_simd128(input: &[u8], from: usize) -> usize {
+        let len = input.len();
+        let mut i = from;
+        while i + 16 <= len {
+            let c = load_input(input, i);
+            // The mask holds one sign bit per byte (a u16), so all-ones
+            // means "no ASCII byte in the chunk".
+            let mask = i8x16_bitmask(c);
+            if mask != 0xffff {
+                return i + (!mask).trailing_zeros() as usize;
+            }
+            i += 16;
+        }
+        while i < len && input[i] >= 0x80 {
+            i += 1;
+        }
+        i
+    }
+}
 /// The scanner pair used by the [`Formatter`](super::Formatter), selected
 /// once per run.
 #[derive(Clone, Copy)]
@@ -469,10 +607,21 @@ impl Scan {
                 }
             })
         }
-        #[cfg(not(target_arch = "x86_64"))]
-        Self {
-            wake: scalar::find_wake,
-            ascii: scalar::find_ascii,
+        // wasm32: compile-time selection only (WASM has no runtime feature
+        // detection); the simd128 scanners are always compiled in.
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self {
+                wake: wasm::find_wake,
+                ascii: wasm::find_ascii,
+            }
+        }
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "wasm32")))]
+        {
+            Self {
+                wake: scalar::find_wake,
+                ascii: scalar::find_ascii,
+            }
         }
     }
 

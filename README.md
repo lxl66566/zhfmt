@@ -2,13 +2,13 @@
 
 简体中文 | [English](./README.en.md)
 
-高性能中文文档批量格式化工具：遵循中文写作原则（盘古之白），在中文与英文/数字之间自动添加空格。
+高性能中文文档批量格式化工具：遵循中文写作原则（盘古之白），在中文与英文/数字之间自动添加空格（盘古之白）。
 
 - 安全：只插入单个空格，从不删除任何内容；原子化替换文件。
-- 快速：SIMD（AVX2/SSE2，运行时检测）+ SWAR 混合扫描 + 多字节 run 跳跃 + COW，无任何正则；已经格式化好的文件只扫描、不分配 buffer、不写回；多文件并行处理。
+- 快速：SIMD（AVX2/SSE2，运行时检测）+ SWAR 混合扫描 + 多字节跳跃 + CoW，无任何正则；多文件并行处理。
 - 专注：不同于 autocorrect，zhfmt 只做加空格这一件事，尽量不产生预期外的修改。
 
-该工具主要用于 markdown 文档格式化，适配 markdown 链接、内嵌 html、inline code、代码块、脚注格式、转义，尽力避免非预期的行为。也可以用于其他纯文本格式的空格添加；未在代码上测试。
+该工具主要用于 markdown 文档格式化，适配 markdown 链接、内嵌 html、inline code、代码块、脚注格式、转义，尽力避免非预期的行为。也可以用于其他纯文本格式的空格添加。
 
 ## 安装
 
@@ -42,7 +42,7 @@ zhfmt -j 4                  # 指定线程数
 
 ### 作为 prettier 插件使用
 
-[`prettier-plugin-zhfmt`](./prettier-plugin-zhfmt) 将引擎编译为 WASM 并包装 prettier 内置 markdown parser，在保留 prettier 原生格式化的同时补上中英文空格：
+[`prettier-plugin-zhfmt`](./prettier-plugin-zhfmt) 将引擎编译为 WASM（128-bit SIMD）并包装 prettier 内置 markdown parser，在保留 prettier 原生格式化的同时补上中英文空格：
 
 ```sh
 pnpm add -D prettier-plugin-zhfmt
@@ -53,13 +53,11 @@ pnpm add -D prettier-plugin-zhfmt
 { "plugins": ["prettier-plugin-zhfmt"] }
 ```
 
-详见[插件文档](./prettier-plugin-zhfmt/README.md)。
-
-prettier-plugin-zhfmt 不带有 SIMD 实现，如果有条件使用二进制则不推荐使用 prettier-plugin-zhfmt。
+更多用法详见[插件文档](./prettier-plugin-zhfmt/README.md)。
 
 ## 配置文件
 
-查找顺序：从当前目录逐级向上查找 `zhfmt.json` 或 `.zhfmt.json`，取最近；都没有则尝试全局配置（`$XDG_CONFIG_HOME/zhfmt/zhfmt.json`，Windows 下为 `%APPDATA%` 对应目录）；再没有则使用默认配置。
+查找顺序：从当前目录逐级向上查找 `zhfmt.json` 或 `.zhfmt.json`；fallback 全局配置（`$XDG_CONFIG_HOME/zhfmt/zhfmt.json`，Windows 下为 `%APPDATA%` 对应目录）。
 
 ```json
 {
@@ -71,7 +69,7 @@ prettier-plugin-zhfmt 不带有 SIMD 实现，如果有条件使用二进制则�
 }
 ```
 
-- `extensions`：要处理的扩展名白名单（不带点），整体覆盖默认值
+- `extensions`：要处理的扩展名白名单，整体覆盖默认值
 - `include`：额外的 glob 白名单，命中后即使扩展名不匹配也会处理
 - `exclude`：glob 黑名单，相对路径匹配
 - `whitelist`：分词白名单，每条恰好两个字符，表示这两个字符之间不插入空格（如 `"B站"` 保持 `B站` 不加空格）

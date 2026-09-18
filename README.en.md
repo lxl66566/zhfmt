@@ -55,7 +55,7 @@ pnpm add -D prettier-plugin-zhfmt
 
 See the [plugin docs](./prettier-plugin-zhfmt/README.md) for details.
 
-`prettier-plugin-zhfmt` does not come with a SIMD implementation; if conditions allow using a binary, it is not recommended to use it.
+The WASM build uses the same 128-bit SIMD scanning (simd128, Node >= 16.4 required; the plugin requires Node >= 18), so the engine itself pays no penalty; the plugin however lacks multi-file parallelism and the CLI, so the binary is still recommended for bulk processing.
 
 ## Configuration file
 

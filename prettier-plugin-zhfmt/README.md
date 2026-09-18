@@ -10,7 +10,7 @@
 pnpm add -D prettier-plugin-zhfmt
 ```
 
-要求 Prettier >= 3.6 (peer dependency)。更早的版本不会 await parser 的 `preprocess`，会导致输出为空。
+要求 Prettier >= 3.6、Node >= 16.4。
 
 ## 使用
 
@@ -26,7 +26,7 @@ pnpm add -D prettier-plugin-zhfmt
 
 ### 纯文本模式
 
-对不想要 Prettier 重排、只要加空格的文件（`.txt`、`.rst` 等无内置 parser 的扩展名自动推断；其他文件可显式指定），使用独立 parser `zhfmt`：除插入空格外输出与输入逐字节一致（不增删换行、不改列表标记）：
+对不想要 Prettier 重排、只要加空格的文件（`.txt`、`.rst` 等无内置 parser 的扩展名自动推断；其他文件可显式指定），使用独立 parser `zhfmt`：
 
 ```json
 {
@@ -37,7 +37,7 @@ pnpm add -D prettier-plugin-zhfmt
 
 ## 行为说明
 
-- 只插入单个空格，从不删除任何内容；幂等。
+- 只插入单个空格，从不删除任何内容。
 - 代码块、inline code、链接 URL、HTML 标签内部不加空格。
 - `zhfmtWhitelist` 选项可指定分词白名单：每条恰好两个字符，表示这两个字符之间不插入空格（如 `"B站"` 保持 `B站` 不加空格）：
 

@@ -10,7 +10,7 @@ src/
 ├── classify.rs   # 字符分类（Class 模型 + ASCII 表 + UTF-8 解码）
 ├── engine/       # 核心引擎（纯函数，无 IO）
 │   ├── mod.rs    # Formatter 状态机：主循环 + on_* 事件处理器
-│   ├── scan.rs   # 字节扫描层：混合 SWAR/SIMD find_wake / find_ascii + Scan 运行时选择
+│   ├── scan.rs   # 字节扫描层：混合 SWAR/SIMD find_wake / find_ascii + Scan 选择（x86_64 运行时检测，wasm32 编译期）
 │   ├── boundary.rs # 边界判定层：crosses + 双向类查询 + 结构构造扫描（HTML/URL/强调）
 │   └── tests.rs  # 引擎单测与回归用例
 ├── config.rs     # zhfmt.json 配置发现与解析（bin only）
@@ -93,8 +93,8 @@ b >= 0x80 || b in { '`', '[', ']', '<', '*', '~', '\n' }
 命中则在 word 内逐字节定位；`find_ascii`（找 run 终点）同理。
 
 **第二层（SIMD 续扫，长距离摊薄）**：头 16 字节都是"无聊"字节时，
-交给运行时检测选出的长距离扫描器：AVX2（32B/步）或 SSE2（16B/步，x86_64 基线），
-其他架构回退 SWAR 循环。
+交给长距离扫描器：x86_64 上运行时检测选 AVX2（32B/步）或 SSE2（16B/步，基线）；
+wasm32 上固定用 simd128（16B/步，见下）；其余架构回退 SWAR 循环。
 
 为什么必须是混合而不是纯 SIMD：
 
@@ -116,6 +116,21 @@ SIMD 细节（`engine::x86`）：
 - 已知残留：即使把比较常量放进 `.rodata` 以内存操作数引用，LLVM 仍会把
   broadcast 提升到循环外，长距离 AVX2 版本在 Windows 上仍带有序言。
   这被有意接受——它只在长干净区段上执行。
+
+SIMD 细节（`engine::wasm`，wasm32）：
+
+- 固定 128-bit SIMD 扩展（`simd128`）：WASM 没有运行时特性检测，而所有
+  现代 JS 引擎（Node >= 16.4 / V8 9.0+）都支持，prettier 插件要求 Node >= 18，
+  因此编译期直接启用。
+- wake 探测移植了 AVX2 的 Teddy nibble 方案：`i8x16_swizzle`（即跨 lane 的
+  `pshufb`）查高低半字节表，且 wasm 的 swizzle 索引语义更干净（>= 16 恒为 0），
+  无需按 lane 复制表。
+- **不要**用 `-C target-feature=+simd128` 全 crate 开启：LLVM 会对引擎其余循环
+  做自动向量化，实测（Node 26 / Win11）端到端反而慢 ~8%。因此仅给扫描器函数加
+  `#[target_feature(enable = "simd128")]`（wasm32 intrinsic 本身是安全函数，
+  函数级 feature 即可生成向量代码）。
+- 实测收益（进程隔离、Node 26，端到端含 JS↔wasm 字符串编解码）：纯 ASCII +10%、
+  纯中文 +20%、混合文档 +3%。
 
 ### 4.3 多字节 run 跳跃
 
