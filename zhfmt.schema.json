@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "zhfmt configuration",
+  "description": "Config file schema (`zhfmt.json` / `.zhfmt.json`); see module docs for\nlookup order.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "JSON Schema reference for editor support (optional, ignored by zhfmt).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "exclude": {
+      "description": "Glob patterns to exclude, relative to the walk root.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "extensions": {
+      "description": "File extensions to process (without dot), replacing the defaults.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "default": null,
+      "items": {
+        "type": "string"
+      }
+    },
+    "include": {
+      "description": "Additional glob patterns to include (even if the extension does not\nmatch), relative to the walk root.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "jobs": {
+      "description": "Number of walker threads; 0 or absent means auto.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint",
+      "default": null,
+      "minimum": 0
+    },
+    "whitelist": {
+      "description": "Character pairs between which no space is inserted; each entry is\nexactly two characters (e.g. `\"B站\"` keeps `B站` unspaced).",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string",
+        "maxLength": 2,
+        "minLength": 2
+      }
+    }
+  },
+  "additionalProperties": false
+}

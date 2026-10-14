@@ -24,6 +24,7 @@ zhfmt --diff                # 打印 unified diff，不写回，退出码同上
 cat a.md | zhfmt            # 管道模式：stdin -> stdout
 zhfmt --ext md,rst docs/    # 覆盖要处理的扩展名列表
 zhfmt -j 4                  # 指定线程数
+zhfmt --schema              # 输出 zhfmt.json 的 JSON Schema
 ```
 
 - 默认只格式化以下扩展名文件：`md, markdown, mdx, txt, rst`；显式传入的文件路径不受限制。
@@ -61,6 +62,7 @@ pnpm add -D prettier-plugin-zhfmt
 
 ```json
 {
+  "$schema": "https://raw.githubusercontent.com/lxl66566/zhfmt/main/zhfmt.schema.json",
   "extensions": ["md", "markdown", "mdx", "txt", "rst"],
   "include": ["docs/*.adoc"],
   "exclude": ["node_modules/", "target/"],
@@ -69,6 +71,7 @@ pnpm add -D prettier-plugin-zhfmt
 }
 ```
 
+- `$schema`：JSON Schema 地址，供编辑器补全与校验，zhfmt 忽略该字段；schema 也可用 `zhfmt --schema` 在本地生成
 - `extensions`：要处理的扩展名白名单，整体覆盖默认值
 - `include`：额外的 glob 白名单，命中后即使扩展名不匹配也会处理
 - `exclude`：glob 黑名单，相对路径匹配

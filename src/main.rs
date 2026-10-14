@@ -21,6 +21,7 @@ use zhfmt::{
   zhfmt --check             # CI mode: report files that would change, exit 1
   zhfmt --diff              # print a unified diff without writing
   cat a.md | zhfmt          # stdin -> stdout
+  zhfmt --schema            # print the JSON schema of zhfmt.json
 "#)]
 struct Cli {
     /// Files or directories to process (defaults to the current directory)
@@ -45,6 +46,10 @@ struct Cli {
     /// Number of walker threads (0 = auto)
     #[arg(short, long)]
     jobs: Option<usize>,
+
+    /// Print the JSON schema of the config file (zhfmt.json) and exit
+    #[arg(long)]
+    schema: bool,
 }
 
 /// Load the config from `--config`, or discover it; `None` if not found.
@@ -66,6 +71,11 @@ fn resolve_config(cli: &Cli) -> Result<Config, String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    if cli.schema {
+        println!("{}", config::schema_json());
+        return ExitCode::SUCCESS;
+    }
 
     // Config applies to every mode, including the stdin pipeline.
     let mut config = match resolve_config(&cli) {

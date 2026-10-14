@@ -39,10 +39,15 @@ pub enum ConfigError {
     WhitelistEntry { entry: String, path: PathBuf },
 }
 
-/// Raw config file schema.
-#[derive(Debug, Default, Deserialize)]
+/// Config file schema (`zhfmt.json` / `.zhfmt.json`); see module docs for
+/// lookup order.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+#[schemars(title = "zhfmt configuration")]
 #[serde(default, deny_unknown_fields)]
 pub struct ConfigFile {
+    /// JSON Schema reference for editor support (optional, ignored by zhfmt).
+    #[serde(rename = "$schema")]
+    pub schema: Option<String>,
     /// File extensions to process (without dot), replacing the defaults.
     pub extensions: Option<Vec<String>>,
     /// Additional glob patterns to include (even if the extension does not
@@ -52,8 +57,10 @@ pub struct ConfigFile {
     pub exclude: Vec<String>,
     /// Character pairs between which no space is inserted; each entry is
     /// exactly two characters (e.g. `"B站"` keeps `B站` unspaced).
+    #[schemars(inner(length(min = 2, max = 2)))]
     pub whitelist: Vec<String>,
     /// Number of walker threads; 0 or absent means auto.
+    #[schemars(range(min = 0))]
     pub jobs: Option<usize>,
 }
 
@@ -143,6 +150,14 @@ pub fn load_file(path: &Path) -> Result<Config, ConfigError> {
     Config::from_file(file, path)
 }
 
+/// Pretty-printed JSON schema of the config file, generated from
+/// [`ConfigFile`] so it can never drift from the actual parsing rules.
+#[must_use]
+pub fn schema_json() -> String {
+    serde_json::to_string_pretty(&schemars::schema_for!(ConfigFile))
+        .expect("schema serialization cannot fail")
+}
+
 /// Find the nearest local config walking up from `start`, or the global one.
 #[must_use]
 pub fn discover(start: &Path) -> Option<PathBuf> {
@@ -203,5 +218,29 @@ mod tests {
             let err = Config::from_file(cfg, Path::new("zhfmt.json")).unwrap_err();
             assert!(err.to_string().contains("exactly two characters"), "{err}");
         }
+    }
+
+    #[test]
+    fn schema_field_is_accepted() {
+        // `$schema` is renamed, so `deny_unknown_fields` must not reject it.
+        let cfg: ConfigFile =
+            serde_json::from_str(r#"{ "$schema": "https://json.schemastore.org/zhfmt.json" }"#)
+                .unwrap();
+        assert_eq!(
+            cfg.schema.as_deref(),
+            Some("https://json.schemastore.org/zhfmt.json")
+        );
+    }
+
+    #[test]
+    fn committed_schema_is_up_to_date() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("zhfmt.schema.json");
+        let committed = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            committed,
+            schema_json() + "\n",
+            "zhfmt.schema.json is stale; regenerate with `cargo run -- --schema > \
+             zhfmt.schema.json`"
+        );
     }
 }

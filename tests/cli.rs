@@ -290,6 +290,28 @@ fn invalid_config_exits_with_code_2() {
 }
 
 #[test]
+fn schema_flag_prints_valid_json() {
+    let out = zhfmt().arg("--schema").output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let schema: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let props = schema["properties"].as_object().unwrap();
+    for key in [
+        "$schema",
+        "extensions",
+        "include",
+        "exclude",
+        "whitelist",
+        "jobs",
+    ] {
+        assert!(props.contains_key(key), "missing property {key}");
+    }
+}
+
+#[test]
 fn unchanged_file_not_rewritten() {
     let tmp = TempDir::new().unwrap();
     let md = write_file(tmp.path(), "a.md", "已经 format 好的\n");

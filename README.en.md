@@ -24,6 +24,7 @@ zhfmt --diff                # print a unified diff without writing back; exit co
 cat a.md | zhfmt            # pipe mode: stdin -> stdout
 zhfmt --ext md,rst docs/    # override the list of extensions to process
 zhfmt -j 4                  # set the number of worker threads
+zhfmt --schema              # print the JSON Schema of zhfmt.json
 ```
 
 - By default only files with these extensions are formatted: `md, markdown, mdx, txt, rst`; explicitly passed file paths are not restricted.
@@ -63,6 +64,7 @@ Lookup order: walk up from the current directory for `zhfmt.json` or `.zhfmt.jso
 
 ```json
 {
+  "$schema": "https://raw.githubusercontent.com/lxl66566/zhfmt/main/zhfmt.schema.json",
   "extensions": ["md", "markdown", "mdx", "txt", "rst"],
   "include": ["docs/*.adoc"],
   "exclude": ["node_modules/", "target/"],
@@ -71,6 +73,7 @@ Lookup order: walk up from the current directory for `zhfmt.json` or `.zhfmt.jso
 }
 ```
 
+- `$schema`: JSON Schema URL for editor completion and validation; ignored by zhfmt. The schema can also be generated locally with `zhfmt --schema`
 - `extensions`: whitelist of extensions to process (no dot), overrides the defaults entirely
 - `include`: extra glob whitelist; matched files are processed even if the extension does not match
 - `exclude`: glob blacklist, matched against relative paths
